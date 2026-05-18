@@ -207,15 +207,6 @@ fn is_single_line_mapping(content: &str) -> bool {
             return true;
         }
     }
-    // Only treat {…} as a mapping if the braced content contains a known key.
-    if content.starts_with('{') && content.ends_with('}') {
-        let inner = &content[1..content.len() - 1];
-        for key in &known_keys {
-            if inner.trim_start().starts_with(key) {
-                return true;
-            }
-        }
-    }
     false
 }
 
@@ -521,13 +512,24 @@ mod tests {
     }
 
     #[test]
-    fn test_is_single_line_mapping_known_key_in_braces() {
-        assert!(is_single_line_mapping("{label: foo}"));
-        assert!(is_single_line_mapping("{command: echo hi}"));
+    fn test_parse_braced_known_key_as_plain() {
+        // A line like `- {label: foo}` should be parsed as a plain fact,
+        // not as a broken mapping.
+        let content = "- {label: foo}\n";
+        let sheet = parse(content, ".facts").unwrap();
+        assert_eq!(sheet.preamble.len(), 1);
+        assert_eq!(sheet.preamble[0].label, "{label: foo}");
+        assert!(sheet.preamble[0].is_plain);
     }
 
     #[test]
-    fn test_is_single_line_mapping_unknown_content_in_braces() {
+    fn test_is_single_line_mapping_braced_content_is_plain() {
+        // Braced content is always treated as a plain fact label,
+        // even if it looks like a mapping inside the braces.
+        // The writer serializes ambiguous labels as multi-line mappings,
+        // so round-trips remain deterministic.
+        assert!(!is_single_line_mapping("{label: foo}"));
+        assert!(!is_single_line_mapping("{command: echo hi}"));
         assert!(!is_single_line_mapping("{this is just a note}"));
         assert!(!is_single_line_mapping("{hello world}"));
     }

@@ -672,16 +672,6 @@ fn is_mapping_like(content: &str) -> bool {
             return true;
         }
     }
-    // Only treat {…} as a mapping if the braced content contains a known key.
-    // A line like `{this is just a note}` is a plain fact, not a mapping.
-    if content.starts_with('{') && content.ends_with('}') {
-        let inner = &content[1..content.len() - 1];
-        for key in &known_keys {
-            if inner.trim_start().starts_with(key) {
-                return true;
-            }
-        }
-    }
     false
 }
 
@@ -1009,6 +999,17 @@ mod tests {
         assert!(
             diags.is_empty(),
             "expected no diagnostics for curly brace plain fact, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_lint_passes_braced_known_key_as_plain() {
+        // `{label: foo}` is a plain fact label, not a broken mapping.
+        let content = "- {label: foo}\n";
+        let diags = lint_content(content, ".facts");
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics for braced known-key plain fact, got: {diags:?}"
         );
     }
 
