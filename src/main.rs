@@ -17,6 +17,7 @@ mod project;
 mod remove;
 mod skills;
 mod tags;
+mod tui;
 mod uninit;
 mod update;
 mod writer;
@@ -218,6 +219,9 @@ enum Command {
         #[command(subcommand)]
         action: Option<SkillsCommand>,
     },
+
+    /// Browse and manage facts interactively.
+    Tui,
 }
 
 #[derive(Subcommand)]
@@ -434,6 +438,9 @@ fn main() -> anyhow::Result<()> {
                 Some(SkillsCommand::List) | None => skills::SkillsAction::List,
             };
             skills::run(&action)?;
+        }
+        Some(Command::Tui) => {
+            tui::run()?;
         }
         None => {
             let opts = list::ListOptions {

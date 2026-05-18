@@ -72,6 +72,13 @@ pub fn run_in(target_id: &str, root: &Path) -> Result<()> {
 
     let output = writer::write(sheet);
     if output.trim().is_empty() {
+        // Verify we have write permission on the file before removing it.
+        // On Unix, remove_file only checks directory permissions, not file permissions.
+        let metadata = std::fs::metadata(file_path)
+            .with_context(|| format!("failed to read metadata for {}", file_path.display()))?;
+        if metadata.permissions().readonly() {
+            anyhow::bail!("failed to remove {}: permission denied", file_path.display());
+        }
         std::fs::remove_file(file_path)
             .with_context(|| format!("failed to remove {}", file_path.display()))?;
     } else {
@@ -177,7 +184,7 @@ mod tests {
 
     #[test]
     fn test_remove_last_fact_removes_section() {
-        let content = "# mysection\n\n- only fact\n";
+        let content = "- stay fact\n\n# mysection\n\n- only fact\n";
         let (dir, facts_path) = setup_test_dir(content);
 
         let target_id = find_id_for_label(content, "only fact");
@@ -186,6 +193,7 @@ mod tests {
         let result = fs::read_to_string(&facts_path).unwrap();
         assert!(!result.contains("mysection"));
         assert!(!result.contains("only fact"));
+        assert!(result.contains("stay fact"));
     }
 
     #[test]
@@ -217,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_remove_nested_section_cleanup() {
-        let content = "# parent\n\n## child\n\n- only child fact\n";
+        let content = "- stay fact\n\n# parent\n\n## child\n\n- only child fact\n";
         let (dir, facts_path) = setup_test_dir(content);
 
         let target_id = find_id_for_label(content, "only child fact");
@@ -226,6 +234,7 @@ mod tests {
         let result = fs::read_to_string(&facts_path).unwrap();
         assert!(!result.contains("parent"));
         assert!(!result.contains("child"));
+        assert!(result.contains("stay fact"));
     }
 
     #[test]

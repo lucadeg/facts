@@ -949,7 +949,7 @@ fn add_then_list_roundtrip() {
 
 #[test]
 fn add_then_remove_roundtrip() {
-    let dir = project("");
+    let dir = project("- stay fact\n");
     facts_cmd(&dir)
         .args(["add", "ephemeral fact"])
         .assert()
@@ -970,6 +970,7 @@ fn add_then_remove_roundtrip() {
 
     let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
     assert!(!content.contains("ephemeral fact"));
+    assert!(content.contains("stay fact"));
 }
 
 #[test]
@@ -1112,7 +1113,7 @@ fn cross_file_list_id_matches_remove_id() {
     // The ID shown by `list` should work with `remove` even across multiple files
     let dir = empty_project();
     fs::write(dir.path().join(".facts"), "- fact in default\n").unwrap();
-    fs::write(dir.path().join("other.facts"), "- fact in other\n").unwrap();
+    fs::write(dir.path().join("other.facts"), "- fact in other\n- stay fact\n").unwrap();
 
     // Get ID from list
     let list_output = facts_cmd(&dir).arg("list").output().unwrap();
@@ -1138,6 +1139,7 @@ fn cross_file_list_id_matches_remove_id() {
         !content.contains("fact in other"),
         "fact should have been removed"
     );
+    assert!(content.contains("stay fact"));
 }
 
 // ===========================================================================
@@ -1600,7 +1602,7 @@ fn lint_validates_all_files() {
 fn remove_fact_from_non_default_file() {
     let dir = empty_project();
     fs::write(dir.path().join(".facts"), "- default fact\n").unwrap();
-    fs::write(dir.path().join("cli.facts"), "- cli fact to remove\n").unwrap();
+    fs::write(dir.path().join("cli.facts"), "- cli fact to remove\n- stay fact\n").unwrap();
 
     // Get ID of the cli fact
     let list_output = facts_cmd(&dir).arg("list").output().unwrap();
@@ -1624,6 +1626,7 @@ fn remove_fact_from_non_default_file() {
         !content.contains("cli fact to remove"),
         "fact should be removed from cli.facts"
     );
+    assert!(content.contains("stay fact"));
     // Default file should be untouched
     let default_content = fs::read_to_string(dir.path().join(".facts")).unwrap();
     assert!(default_content.contains("default fact"));
@@ -3585,7 +3588,7 @@ fn move_unknown_id_errors() {
 
 #[test]
 fn move_cross_file_with_section() {
-    let dir = project("- fact to relocate\n");
+    let dir = project("- fact to stay\n- fact to relocate\n");
 
     let list_output = facts_cmd(&dir).arg("list").output().unwrap();
     let stdout = String::from_utf8_lossy(&list_output.stdout);
@@ -3611,6 +3614,7 @@ fn move_cross_file_with_section() {
 
     let source = fs::read_to_string(dir.path().join(".facts")).unwrap();
     assert!(!source.contains("fact to relocate"));
+    assert!(source.contains("fact to stay"));
 
     let target = fs::read_to_string(dir.path().join("api.facts")).unwrap();
     assert!(target.contains("# api"));

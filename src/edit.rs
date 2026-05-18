@@ -123,10 +123,13 @@ pub fn run_in(opts: &EditOptions, root: &Path) -> Result<()> {
     }
 
     // Reject duplicate --new-id: check that the new ID doesn't already exist
-    // among OTHER facts (not the one being edited), including computed IDs.
+    // among OTHER facts (not the one being edited) as an explicit ID.
     if let Some(ref new_id) = opts.new_id {
-        for (i, _) in all_fact_labels.iter().enumerate() {
-            if !resolved.contains(&i) && assigned_ids[i] == *new_id {
+        for (i, (_, explicit_id)) in all_fact_labels.iter().enumerate() {
+            if !resolved.contains(&i)
+                && let Some(existing_id) = explicit_id
+                && existing_id == new_id
+            {
                 anyhow::bail!("ID already exists: {}", new_id);
             }
         }
@@ -482,16 +485,16 @@ mod tests {
     }
 
     #[test]
-    fn test_edit_rejects_new_id_colliding_with_computed_id() {
+    fn test_edit_allows_new_id_colliding_with_computed_id_and_extends() {
         let content = "- first fact\n- second fact\n";
-        let (dir, _) = setup_test_dir(content);
+        let (dir, facts_path) = setup_test_dir(content);
 
-        // first fact has a computed ID; try to assign it to second fact
+        // first fact has a computed ID; assign it to second fact as explicit ID
         let first_id = find_id_for_label(content, "first fact");
         let second_id = find_id_for_label(content, "second fact");
 
         let opts = EditOptions {
-            target_ids: vec![second_id],
+            target_ids: vec![second_id.clone()],
             label: None,
             command: None,
             new_id: Some(first_id.clone()),
@@ -500,12 +503,23 @@ mod tests {
             remove_tags: None,
         };
         let result = run_in(&opts, dir.path());
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("ID already exists"),
-            "expected duplicate ID error, got: {err}"
-        );
+        assert!(result.is_ok(), "should allow explicit ID matching a computed ID");
+
+        // Verify both facts are still addressable with unique IDs.
+        let new_content = fs::read_to_string(&facts_path).unwrap();
+        let new_sheet = parser::parse(&new_content, ".facts").unwrap();
+        let new_labels: Vec<(String, Option<String>)> = new_sheet
+            .all_facts()
+            .iter()
+            .map(|(_, f)| (f.label.clone(), f.explicit_id.clone()))
+            .collect();
+        let new_ids = id::assign_ids(&new_labels);
+
+        let first_idx = new_labels.iter().position(|(l, _)| l == "first fact").unwrap();
+        let second_idx = new_labels.iter().position(|(l, _)| l == "second fact").unwrap();
+        assert_ne!(new_ids[first_idx], new_ids[second_idx], "IDs must be unique");
+        assert_eq!(new_ids[second_idx], first_id, "explicit ID must be preserved");
+        assert!(new_ids[first_idx].len() > first_id.len(), "computed ID should be extended");
     }
 
     #[test]

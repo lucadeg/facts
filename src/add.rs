@@ -74,7 +74,7 @@ fn run_in(opts: &AddOptions, root: &Path) -> Result<String> {
 
     if let Some(ref id) = opts.id {
         let all_files = project::discover_fact_files(root)?;
-        let mut all_fact_labels: Vec<(String, Option<String>)> = Vec::new();
+        let mut explicit_ids: Vec<String> = Vec::new();
         for path in &all_files {
             if !path.exists() {
                 continue;
@@ -87,12 +87,13 @@ fn run_in(opts: &AddOptions, root: &Path) -> Result<String> {
                 .unwrap_or(".facts");
             if let Ok(sheet) = parser::parse(&content, fname) {
                 for (_, fact) in sheet.all_facts() {
-                    all_fact_labels.push((fact.label.clone(), fact.explicit_id.clone()));
+                    if let Some(ref existing_id) = fact.explicit_id {
+                        explicit_ids.push(existing_id.clone());
+                    }
                 }
             }
         }
-        let assigned_ids = id::assign_ids(&all_fact_labels);
-        if assigned_ids.iter().any(|assigned| assigned == id) {
+        if explicit_ids.iter().any(|existing| existing == id) {
             anyhow::bail!("ID already exists: {}", id);
         }
     }
@@ -511,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn test_add_rejects_computed_id_collision() {
+    fn test_add_allows_computed_id_collision_and_extends() {
         let (dir, facts_path) = setup_test_dir();
         fs::write(&facts_path, "- existing fact\n").unwrap();
 
@@ -531,14 +532,28 @@ mod tests {
             file: None,
             section: None,
             command: None,
-            id: Some(existing_id),
+            id: Some(existing_id.clone()),
             tags: vec![],
         };
         let result = run_in(&opts, dir.path());
-        assert!(result.is_err());
-        assert!(
-            result.unwrap_err().to_string().contains("ID already exists")
-        );
+        assert!(result.is_ok(), "should allow explicit ID matching a computed ID");
+
+        // The existing fact's computed ID should have been extended to avoid collision.
+        let new_content = fs::read_to_string(&facts_path).unwrap();
+        let new_sheet = parser::parse(&new_content, ".facts").unwrap();
+        let new_labels: Vec<(String, Option<String>)> = new_sheet
+            .all_facts()
+            .iter()
+            .map(|(_, f)| (f.label.clone(), f.explicit_id.clone()))
+            .collect();
+        let new_ids = id::assign_ids(&new_labels);
+
+        // Both facts should be addressable with different IDs.
+        let existing_idx = new_labels.iter().position(|(l, _)| l == "existing fact").unwrap();
+        let new_idx = new_labels.iter().position(|(l, _)| l == "new fact").unwrap();
+        assert_ne!(new_ids[existing_idx], new_ids[new_idx], "IDs must be unique");
+        assert_eq!(new_ids[new_idx], existing_id, "explicit ID must be preserved");
+        assert!(new_ids[existing_idx].len() > existing_id.len(), "computed ID should be extended");
     }
 
     #[test]

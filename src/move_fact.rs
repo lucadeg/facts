@@ -141,6 +141,12 @@ pub fn run_in(opts: &MoveOptions, root: &Path) -> Result<()> {
     let (ref source_path, ref source_sheet) = sheets[source_sheet_idx];
     let source_output = writer::write(source_sheet);
     if source_output.trim().is_empty() {
+        // Verify we have write permission on the file before removing it.
+        let metadata = std::fs::metadata(source_path)
+            .with_context(|| format!("failed to read metadata for {}", source_path.display()))?;
+        if metadata.permissions().readonly() {
+            anyhow::bail!("failed to remove {}: permission denied", source_path.display());
+        }
         std::fs::remove_file(source_path)
             .with_context(|| format!("failed to remove {}", source_path.display()))?;
     } else {
@@ -434,7 +440,7 @@ mod tests {
 
     #[test]
     fn test_move_cross_file_with_section() {
-        let content = "- fact to move\n";
+        let content = "- fact to stay\n- fact to move\n";
         let (dir, facts_path) = setup_test_dir(content);
 
         let target_id = find_id_for_label(content, "fact to move");
@@ -447,6 +453,7 @@ mod tests {
 
         let source = fs::read_to_string(&facts_path).unwrap();
         assert!(!source.contains("fact to move"));
+        assert!(source.contains("fact to stay"));
 
         let target = fs::read_to_string(dir.path().join("api.facts")).unwrap();
         assert!(target.contains("# api"));
