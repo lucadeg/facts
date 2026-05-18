@@ -123,10 +123,10 @@ pub fn run_in(opts: &EditOptions, root: &Path) -> Result<()> {
     }
 
     // Reject duplicate --new-id: check that the new ID doesn't already exist
-    // among OTHER facts (not the one being edited).
+    // among OTHER facts (not the one being edited), including computed IDs.
     if let Some(ref new_id) = opts.new_id {
-        for (i, (_, explicit_id)) in all_fact_labels.iter().enumerate() {
-            if !resolved.contains(&i) && explicit_id.as_deref() == Some(new_id.as_str()) {
+        for (i, _) in all_fact_labels.iter().enumerate() {
+            if !resolved.contains(&i) && assigned_ids[i] == *new_id {
                 anyhow::bail!("ID already exists: {}", new_id);
             }
         }
@@ -479,6 +479,33 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("zzz"), "error should mention the ID: {err}");
+    }
+
+    #[test]
+    fn test_edit_rejects_new_id_colliding_with_computed_id() {
+        let content = "- first fact\n- second fact\n";
+        let (dir, _) = setup_test_dir(content);
+
+        // first fact has a computed ID; try to assign it to second fact
+        let first_id = find_id_for_label(content, "first fact");
+        let second_id = find_id_for_label(content, "second fact");
+
+        let opts = EditOptions {
+            target_ids: vec![second_id],
+            label: None,
+            command: None,
+            new_id: Some(first_id.clone()),
+            tags: None,
+            add_tags: None,
+            remove_tags: None,
+        };
+        let result = run_in(&opts, dir.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("ID already exists"),
+            "expected duplicate ID error, got: {err}"
+        );
     }
 
     #[test]
