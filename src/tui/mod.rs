@@ -31,7 +31,7 @@ use crate::tags::{matches_search_expr, matches_tag_expr, validate_tag_expr};
 
 use form::{FormAction, FormMode, FormState};
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub enum Mode {
     Browse,
     Filter,
@@ -1049,6 +1049,382 @@ fn cleanup_terminal() {
         DisableMouseCapture,
         crossterm::cursor::Show
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn temp_app(content: &str) -> (TempDir, App) {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(dir.path().join(".facts"), content).unwrap();
+        let app = App::new(dir.path().to_path_buf(), false).unwrap();
+        (dir, app)
+    }
+
+    // === Form state transitions ===
+
+    #[test]
+    fn test_form_typing_and_submit() {
+        let mut form = FormState::new_add();
+        form.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::empty()));
+        form.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::empty()));
+        assert_eq!(form.fields[0].value, "hi");
+        assert_eq!(form.fields[0].cursor, 2);
+
+        // Tab moves to next field
+        let action = form.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
+        assert_eq!(action, FormAction::None);
+        assert_eq!(form.focused, 1);
+
+        // Ctrl+S submits
+        let action = form.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert_eq!(action, FormAction::Submit);
+    }
+
+    #[test]
+    fn test_form_cancel_and_backtab() {
+        let mut form = FormState::new_add();
+        form.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
+        assert_eq!(form.focused, 1);
+
+        // BackTab moves back to previous field
+        let action = form.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::empty()));
+        assert_eq!(action, FormAction::None);
+        assert_eq!(form.focused, 0);
+
+        // BackTab from first field wraps to last
+        let action = form.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::empty()));
+        assert_eq!(action, FormAction::None);
+        assert_eq!(form.focused, 5);
+
+        // Esc cancels
+        let action = form.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+        assert_eq!(action, FormAction::Cancel);
+    }
+
+    #[test]
+    fn test_form_backspace_delete() {
+        let mut form = FormState::new_add();
+        form.fields[0].value = "abc".into();
+        form.fields[0].cursor = 3;
+
+        form.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
+        assert_eq!(form.fields[0].value, "ab");
+        assert_eq!(form.fields[0].cursor, 2);
+
+        form.fields[0].cursor = 1;
+        form.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::empty()));
+        assert_eq!(form.fields[0].value, "a");
+        assert_eq!(form.fields[0].cursor, 1);
+    }
+
+    #[test]
+    fn test_form_ctrl_u_clears_field() {
+        let mut form = FormState::new_add();
+        form.fields[0].value = "hello".into();
+        form.fields[0].cursor = 5;
+
+        let action = form.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(action, FormAction::None);
+        assert_eq!(form.fields[0].value, "");
+        assert_eq!(form.fields[0].cursor, 0);
+    }
+
+    // === Browse / Filter transitions ===
+
+    #[test]
+    fn test_browse_to_filter_and_back() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        assert_eq!(app.mode, Mode::Browse);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.mode, Mode::Filter);
+        assert_eq!(app.filter_field, 0);
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.mode, Mode::Browse);
+    }
+
+    #[test]
+    fn test_filter_tab_cycles_fields() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.mode = Mode::Filter;
+        app.filter_field = 0;
+        app.filter_cursor = 0;
+        app.search = "foo".into();
+
+        // Tab to tags
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.filter_field, 1);
+        assert_eq!(app.filter_cursor, 0);
+
+        // Type in tags
+        app.handle_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty()))
+            .unwrap();
+        app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.tags_filter, "mv");
+        assert_eq!(app.filter_cursor, 2);
+
+        // Tab to section
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.filter_field, 2);
+        assert_eq!(app.filter_cursor, 0);
+
+        // Tab wraps back to search
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.filter_field, 0);
+        assert_eq!(app.filter_cursor, 3); // end of "foo"
+
+        // BackTab to section
+        app.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.filter_field, 2);
+        assert_eq!(app.filter_cursor, 0);
+    }
+
+    #[test]
+    fn test_filter_typing_and_cursor() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.mode = Mode::Filter;
+        app.filter_field = 0;
+        app.filter_cursor = 0;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::empty()))
+            .unwrap();
+        app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::empty()))
+            .unwrap();
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.search, "tes");
+        assert_eq!(app.filter_cursor, 3);
+        assert!(app.filtered_indices.len() <= app.display_facts.len());
+    }
+
+    #[test]
+    fn test_filter_ctrl_u_clears_field() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.mode = Mode::Filter;
+        app.filter_field = 0;
+        app.search = "hello".into();
+        app.filter_cursor = 5;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert_eq!(app.search, "");
+        assert_eq!(app.filter_cursor, 0);
+    }
+
+    #[test]
+    fn test_filter_backspace_and_delete() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.mode = Mode::Filter;
+        app.filter_field = 0;
+        app.search = "abc".into();
+        app.filter_cursor = 3;
+
+        app.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.search, "ab");
+        assert_eq!(app.filter_cursor, 2);
+
+        app.filter_cursor = 1;
+        app.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.search, "a");
+    }
+
+    // === Tree expand/collapse ===
+
+    #[test]
+    fn test_tree_expand_collapse_via_keys() {
+        let (_dir, mut app) = temp_app("# cli\n\n- fact one\n# api\n\n- fact two\n");
+        app.show_tree = true;
+        app.tree_focused = true;
+        app.rebuild_tree();
+
+        let cli_idx = app.tree_nodes.iter().position(|n| n.title == "cli").unwrap();
+        // Flat paths produce leaf nodes with no children
+        assert!(!app.tree_nodes[cli_idx].has_children);
+        assert!(app.tree_nodes[cli_idx].expanded);
+
+        // Select cli node
+        let visible = tree::visible_indices(&app.tree_nodes);
+        let cli_vis = visible.iter().position(|&i| i == cli_idx).unwrap();
+        app.tree_selected = cli_vis;
+
+        // 'h' on a leaf node with depth 0 does nothing (no parent to move to)
+        app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::empty()))
+            .unwrap();
+        assert!(!app.tree_nodes[cli_idx].has_children);
+    }
+
+    #[test]
+    fn test_tree_expand_collapse_nested() {
+        let (_dir, mut app) = temp_app(
+            "# cli\n## add\n\n- fact one\n## check\n\n- fact two\n# api\n\n- fact three\n",
+        );
+        app.show_tree = true;
+        app.tree_focused = true;
+        app.rebuild_tree();
+
+        let cli_idx = app.tree_nodes.iter().position(|n| n.title == "cli").unwrap();
+        assert!(app.tree_nodes[cli_idx].has_children);
+        assert!(app.tree_nodes[cli_idx].expanded);
+
+        // Select cli node
+        let visible = tree::visible_indices(&app.tree_nodes);
+        let cli_vis = visible.iter().position(|&i| i == cli_idx).unwrap();
+        app.tree_selected = cli_vis;
+
+        // 'h' collapses cli
+        app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::empty()))
+            .unwrap();
+        assert!(!app.tree_nodes[cli_idx].expanded);
+
+        // 'l' expands cli
+        app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::empty()))
+            .unwrap();
+        assert!(app.tree_nodes[cli_idx].expanded);
+    }
+
+    #[test]
+    fn test_tree_focus_switch_with_tab() {
+        let (_dir, mut app) = temp_app("# cli\n\n- fact one\n");
+        app.show_tree = true;
+        app.tree_focused = true;
+
+        // Tab when tree_focused and show_tree => unfocus tree
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()))
+            .unwrap();
+        assert!(!app.tree_focused);
+
+        // Tab when show_tree and not tree_focused => focus tree
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()))
+            .unwrap();
+        assert!(app.tree_focused);
+    }
+
+    #[test]
+    fn test_tree_esc_hides_tree() {
+        let (_dir, mut app) = temp_app("# cli\n\n- fact one\n");
+        app.show_tree = true;
+        app.tree_focused = true;
+        app.apply_tree_filter();
+        assert!(app.tree_filter.is_some());
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::empty()))
+            .unwrap();
+        assert!(!app.show_tree);
+        assert!(!app.tree_focused);
+        assert!(app.tree_filter.is_none());
+    }
+
+    // === Mouse scroll routing ===
+
+    #[test]
+    fn test_mouse_scroll_routes_to_tree_when_focused() {
+        let (_dir, mut app) = temp_app("# cli\n\n- fact one\n# api\n\n- fact two\n");
+        app.show_tree = true;
+        app.tree_focused = true;
+        app.rebuild_tree();
+
+        let before = app.tree_selected;
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::empty(),
+        });
+        // Only 2 top-level nodes, so scroll by 3 clamps to last index (1)
+        assert_eq!(app.tree_selected, 1);
+
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::empty(),
+        });
+        assert_eq!(app.tree_selected, before);
+    }
+
+    #[test]
+    fn test_mouse_scroll_routes_to_table_when_unfocused() {
+        let (_dir, mut app) = temp_app("- a\n- b\n- c\n- d\n- e\n");
+        app.show_tree = true;
+        app.tree_focused = false;
+        app.selected = 0;
+
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::empty(),
+        });
+        assert_eq!(app.selected, 3);
+
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::empty(),
+        });
+        assert_eq!(app.selected, 0);
+    }
+
+    // === Detail / Browse keyboard handling ===
+
+    #[test]
+    fn test_browse_to_detail_and_back() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        assert_eq!(app.mode, Mode::Browse);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.mode, Mode::Detail);
+        assert_eq!(app.detail_fact, Some(0));
+
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.mode, Mode::Browse);
+        assert!(app.detail_fact.is_none());
+    }
+
+    #[test]
+    fn test_detail_esc_returns_to_browse() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.detail_fact = Some(0);
+        app.mode = Mode::Detail;
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.mode, Mode::Browse);
+        assert!(app.detail_fact.is_none());
+    }
+
+    #[test]
+    fn test_detail_e_opens_edit_form() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.detail_fact = Some(0);
+        app.mode = Mode::Detail;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.mode, Mode::Form);
+        assert!(app.form.is_some());
+        assert_eq!(app.form.as_ref().unwrap().mode, FormMode::Edit);
+        assert_eq!(app.form.as_ref().unwrap().fields[0].value, "first");
+    }
 }
 
 pub fn run() -> Result<()> {

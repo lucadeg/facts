@@ -7,6 +7,7 @@ pub struct FormField {
     pub required: bool,
 }
 
+#[derive(PartialEq, Debug)]
 pub enum FormMode {
     Add,
     Edit,
@@ -22,6 +23,7 @@ pub struct FormState {
     pub error: Option<String>,
 }
 
+#[derive(PartialEq, Debug)]
 pub enum FormAction {
     None,
     Submit,
