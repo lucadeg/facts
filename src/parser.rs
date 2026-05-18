@@ -6,6 +6,23 @@ use anyhow::{Context, Result, bail};
 
 use crate::model::{Fact, FactSheet, Section};
 
+/// Check if a line starts with a fact prefix (`- `, `-\t`, or bare `-`).
+pub fn is_fact_prefix(line: &str) -> bool {
+    line.starts_with("- ") || line.starts_with("-\t") || line == "-"
+}
+
+/// Strip the fact prefix (`- ` or `-\t`) from a line.
+pub fn strip_fact_prefix(line: &str) -> &str {
+    line.strip_prefix("- ")
+        .or_else(|| line.strip_prefix("-\t"))
+        .unwrap_or(line)
+}
+
+/// Check if a line starts with a continuation prefix (`  ` or `\t`).
+pub fn is_continuation_prefix(line: &str) -> bool {
+    line.starts_with("  ") || line.starts_with('\t')
+}
+
 /// Parse a .facts file from its content and filename.
 pub fn parse(content: &str, filename: &str) -> Result<FactSheet> {
     let content = content.strip_prefix('\u{FEFF}').unwrap_or(content);
@@ -154,10 +171,12 @@ fn parse_facts(lines: &[FactLine]) -> Result<Vec<Fact>> {
 
     for fl in lines {
         let line = &fl.raw;
-        if line.starts_with("- ") || line == "-" {
+        if is_fact_prefix(line) {
             entries.push((vec![line.clone()], fl.blank_lines_before));
-        } else if line.starts_with("  ") && !entries.is_empty() {
+        } else if is_continuation_prefix(line) && !entries.is_empty() {
             entries.last_mut().unwrap().0.push(line.clone());
+        } else if line.starts_with(' ') && !line.starts_with("  ") && !entries.is_empty() {
+            bail!("continuation line must be indented with 2 spaces or a tab: {line}");
         } else {
             bail!("unexpected line (not a fact or continuation): {line}");
         }
@@ -178,7 +197,7 @@ fn parse_single_fact(lines: &[String], blank_lines_before: usize) -> Result<Fact
 
     if lines.len() == 1 {
         let line = &lines[0];
-        let content = line.strip_prefix("- ").unwrap_or(line);
+        let content = strip_fact_prefix(line);
 
         if is_single_line_mapping(content) {
             return parse_mapping_fact(lines, blank_lines_before);
@@ -219,7 +238,7 @@ fn parse_mapping_fact(lines: &[String], blank_lines_before: usize) -> Result<Fac
     let mut explicit_id: Option<String> = None;
     let mut mapping_tags: Vec<String> = Vec::new();
 
-    let first_line = lines[0].strip_prefix("- ").unwrap_or(&lines[0]);
+    let first_line = strip_fact_prefix(&lines[0]);
 
     let mut kv_lines: Vec<String> = vec![first_line.to_string()];
     for line in &lines[1..] {
@@ -532,5 +551,38 @@ mod tests {
         assert!(!is_single_line_mapping("{command: echo hi}"));
         assert!(!is_single_line_mapping("{this is just a note}"));
         assert!(!is_single_line_mapping("{hello world}"));
+    }
+
+    #[test]
+    fn test_parse_tab_after_dash_fact() {
+        let content = "-\ta simple fact\n";
+        let sheet = parse(content, ".facts").unwrap();
+        assert_eq!(sheet.preamble.len(), 1);
+        assert_eq!(sheet.preamble[0].label, "a simple fact");
+        assert!(sheet.preamble[0].is_plain);
+    }
+
+    #[test]
+    fn test_parse_tab_indented_continuation() {
+        let content = "-\tlabel: project is a Cargo project\n\tcommand: test -f Cargo.toml\n";
+        let sheet = parse(content, ".facts").unwrap();
+        assert_eq!(sheet.preamble.len(), 1);
+        assert_eq!(sheet.preamble[0].label, "project is a Cargo project");
+        assert_eq!(
+            sheet.preamble[0].command.as_deref(),
+            Some("test -f Cargo.toml")
+        );
+        assert!(!sheet.preamble[0].is_plain);
+    }
+
+    #[test]
+    fn test_parse_single_space_continuation_error() {
+        let content = "- label: test\n command: echo hi\n";
+        let err = parse(content, ".facts").unwrap_err();
+        let root = err.root_cause().to_string();
+        assert!(
+            root.contains("continuation line must be indented with 2 spaces or a tab"),
+            "expected helpful error for single-space continuation, got: {root}"
+        );
     }
 }

@@ -221,7 +221,7 @@ fn check_mixed_tags(content: &str, filename: &str, diagnostics: &mut Vec<LintDia
                     }
                 }
             }
-            let stripped = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+            let stripped = parser::strip_fact_prefix(trimmed);
             if stripped.starts_with("tags: ") || stripped == "tags:" {
                 has_mapping_tags = true;
             }
@@ -249,7 +249,7 @@ fn check_bare_tags(content: &str, filename: &str, diagnostics: &mut Vec<LintDiag
     for group in fact_groups {
         for (offset, line) in group.lines.iter().enumerate() {
             let trimmed = line.trim();
-            let stripped = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+            let stripped = parser::strip_fact_prefix(trimmed);
 
             if let Some(val) = stripped.strip_prefix("tags: ") {
                 let val = val.trim();
@@ -367,7 +367,7 @@ fn check_invalid_keys(content: &str, filename: &str, diagnostics: &mut Vec<LintD
     for group in fact_groups {
         if group.lines.len() < 2 {
             let line = group.lines[0];
-            let content_part = line.strip_prefix("- ").unwrap_or(line);
+            let content_part = parser::strip_fact_prefix(line);
             if is_mapping_like(content_part) {
                 check_keys_in_line(
                     content_part,
@@ -380,7 +380,7 @@ fn check_invalid_keys(content: &str, filename: &str, diagnostics: &mut Vec<LintD
             continue;
         }
 
-        let first = group.lines[0].strip_prefix("- ").unwrap_or(group.lines[0]);
+        let first = parser::strip_fact_prefix(group.lines[0]);
         check_keys_in_line(first, &known_keys, filename, group.start_line, diagnostics);
 
         for (offset, line) in group.lines[1..].iter().enumerate() {
@@ -430,10 +430,22 @@ fn check_line_structure(content: &str, filename: &str, diagnostics: &mut Vec<Lin
         if line.trim_start().starts_with('#') {
             continue;
         }
-        if line.starts_with("- ") || line == "-" {
+        if parser::is_fact_prefix(line) {
             continue;
         }
-        if line.starts_with("  ") {
+        if parser::is_continuation_prefix(line) {
+            continue;
+        }
+        if line.starts_with(' ') && !line.starts_with("  ") {
+            diagnostics.push(LintDiagnostic {
+                file: filename.to_string(),
+                line: Some(line_num),
+                message: format!(
+                    "continuation line must be indented with 2 spaces or a tab: {}",
+                    line.trim()
+                ),
+                severity: Severity::Error,
+            });
             continue;
         }
         diagnostics.push(LintDiagnostic {
@@ -468,7 +480,7 @@ fn check_unknown_continuation_lines(
             continue;
         }
 
-        let first = group.lines[0].strip_prefix("- ").unwrap_or(group.lines[0]);
+        let first = parser::strip_fact_prefix(group.lines[0]);
         let is_mapping = known_prefixes.iter().any(|p| first.starts_with(p));
         if !is_mapping {
             continue;
@@ -519,7 +531,7 @@ fn check_duplicate_mapping_keys(
             continue;
         }
 
-        let first = group.lines[0].strip_prefix("- ").unwrap_or(group.lines[0]);
+        let first = parser::strip_fact_prefix(group.lines[0]);
         let is_mapping = known_prefixes.iter().any(|p| first.starts_with(p));
         if !is_mapping {
             continue;
@@ -579,7 +591,7 @@ fn check_empty_mapping_values(
     for group in fact_groups {
         for (offset, line) in group.lines.iter().enumerate() {
             let trimmed = line.trim();
-            let stripped = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+            let stripped = parser::strip_fact_prefix(trimmed);
 
             for key in &known_keys {
                 let key_colon = format!("{key}:");
@@ -610,8 +622,9 @@ fn check_double_at_tags(content: &str, filename: &str, diagnostics: &mut Vec<Lin
         let line_num = i + 1;
         let trimmed = line.trim();
 
-        let text = if let Some(rest) = trimmed.strip_prefix("- ") {
-            rest
+        let stripped = parser::strip_fact_prefix(trimmed);
+        let text = if stripped != trimmed {
+            stripped
         } else if let Some(rest) = trimmed.strip_prefix("label: ") {
             rest
         } else {
@@ -651,12 +664,12 @@ fn group_fact_lines<'a>(lines: &[&'a str]) -> Vec<FactLineGroup<'a>> {
             continue;
         }
 
-        if line.starts_with("- ") || *line == "-" {
+        if parser::is_fact_prefix(line) {
             groups.push(FactLineGroup {
                 lines: vec![line],
                 start_line: line_num,
             });
-        } else if line.starts_with("  ") && !groups.is_empty() {
+        } else if parser::is_continuation_prefix(line) && !groups.is_empty() {
             groups.last_mut().unwrap().lines.push(line);
         }
     }
@@ -1037,6 +1050,47 @@ mod tests {
         assert!(
             diags.is_empty(),
             "expected no diagnostics for single-@ tag, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_lint_passes_tab_after_dash() {
+        let content = "-\ta fact with tab after dash\n";
+        let diags = lint_content(content, ".facts");
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics for tab-after-dash fact, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_lint_passes_tab_indented_continuation() {
+        let content = "- label: a mapping fact\n\tcommand: echo hi\n";
+        let diags = lint_content(content, ".facts");
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics for tab-indented continuation, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_lint_catches_single_space_continuation() {
+        let content = "- label: test\n command: echo hi\n";
+        let diags = lint_content(content, ".facts");
+        let errors: Vec<_> = diags
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .collect();
+        assert!(
+            !errors.is_empty(),
+            "expected error for single-space continuation, got: {diags:?}"
+        );
+        assert!(
+            errors[0]
+                .message
+                .contains("continuation line must be indented with 2 spaces or a tab"),
+            "expected helpful error message, got: {}",
+            errors[0].message
         );
     }
 }
