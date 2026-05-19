@@ -8,7 +8,7 @@
 /// is detected on the system, symlinks are created from `.claude/skills/`.
 ///
 /// Idempotent: skips steps that are already done.
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::Path;
 
 use crate::project;
@@ -91,6 +91,10 @@ fn run_in(root: &Path, name: Option<&str>) -> Result<()> {
     };
     let facts_path = root.join(&filename);
 
+    if let Some(n) = name {
+        validate_name(n)?;
+    }
+
     if facts_path.exists() && !facts_path.is_file() {
         anyhow::bail!("{filename} exists but is not a file");
     } else if facts_path.is_file() {
@@ -98,7 +102,8 @@ fn run_in(root: &Path, name: Option<&str>) -> Result<()> {
     } else {
         let stacks = detect_stacks(root);
         let content = generate_facts_content(&stacks);
-        std::fs::write(&facts_path, &content)?;
+        std::fs::write(&facts_path, &content)
+            .with_context(|| format!("failed to write {}", facts_path.display()))?;
         if stacks.is_empty() {
             println!("  create  {filename} (no frameworks detected)");
         } else {
@@ -956,6 +961,16 @@ fn detect_py_runner(root: &Path, pyproject: &str) -> PyRunner {
 
 fn read_file(root: &Path, name: &str) -> Option<String> {
     std::fs::read_to_string(root.join(name)).ok()
+}
+
+fn validate_name(name: &str) -> Result<()> {
+    if name.contains('/') || name.contains('\\') {
+        anyhow::bail!("init name cannot contain path separators: {name}");
+    }
+    if name == "." || name == ".." {
+        anyhow::bail!("init name cannot be '.' or '..'");
+    }
+    Ok(())
 }
 
 fn file_exists(root: &Path, name: &str) -> bool {
@@ -2112,5 +2127,49 @@ mod tests {
             std::fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
             "# Claude\n"
         );
+    }
+
+    #[test]
+    fn test_validate_name_rejects_forward_slash() {
+        let result = validate_name("api/v1");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("path separators"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn test_validate_name_rejects_backslash() {
+        let result = validate_name("api\\v1");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("path separators"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn test_validate_name_rejects_dot() {
+        let result = validate_name(".");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("'.' or '..'"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn test_validate_name_rejects_dotdot() {
+        let result = validate_name("..");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("'.' or '..'"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn test_validate_name_accepts_simple() {
+        assert!(validate_name("api").is_ok());
+        assert!(validate_name("cli-auth").is_ok());
+        assert!(validate_name("my_facts").is_ok());
+    }
+
+    #[test]
+    fn test_validate_name_accepts_with_extension() {
+        assert!(validate_name("api.facts").is_ok());
     }
 }

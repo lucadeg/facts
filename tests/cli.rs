@@ -2967,6 +2967,65 @@ fn init_errors_when_facts_is_directory() {
         .stderr(predicate::str::contains(".facts exists but is not a file"));
 }
 
+#[test]
+fn init_rejects_name_with_forward_slash() {
+    let dir = empty_project();
+
+    facts_cmd(&dir)
+        .args(["init", "api/v1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path separators"));
+}
+
+#[test]
+fn init_rejects_name_with_backslash() {
+    let dir = empty_project();
+
+    facts_cmd(&dir)
+        .args(["init", "api\\v1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path separators"));
+}
+
+#[test]
+fn init_rejects_name_dot() {
+    let dir = empty_project();
+
+    facts_cmd(&dir)
+        .args(["init", ".."])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("'.' or '..'"));
+}
+
+#[test]
+fn init_rejects_name_dotdot() {
+    let dir = empty_project();
+
+    facts_cmd(&dir)
+        .args(["init", ".."])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("'.' or '..'"));
+}
+
+#[test]
+fn init_does_not_create_file_outside_project_root() {
+    let dir = empty_project();
+    let parent = dir.path().parent().unwrap();
+
+    facts_cmd(&dir)
+        .args(["init", "../traversal_guard"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path separators"));
+
+    // Ensure no file was created in the parent directory
+    assert!(!parent.join("traversal_guard.facts").exists());
+}
+
 // ===========================================================================
 // lint — empty label detection (ISSUE-029)
 // ===========================================================================
