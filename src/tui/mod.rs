@@ -41,7 +41,7 @@ pub enum Mode {
     ConfirmDelete,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum CheckResult {
     Passed,
     Failed(String),
@@ -122,6 +122,7 @@ pub struct App {
     pub tree_filter: Option<String>,
 
     pub pending_delete: Option<String>,
+    pub check_timeout: Option<Duration>,
 }
 
 impl App {
@@ -158,6 +159,7 @@ impl App {
             tree_focused: false,
             tree_filter: None,
             pending_delete: None,
+            check_timeout: Some(Duration::from_secs(30)),
         };
         app.load_data()?;
         Ok(app)
@@ -993,6 +995,7 @@ impl App {
             .map(|f| (f.global_index, f.command.clone()))
             .collect();
         let root = self.project_root.clone();
+        let timeout = self.check_timeout;
 
         std::thread::spawn(move || {
             for (idx, command) in facts {
@@ -1001,20 +1004,11 @@ impl App {
                 }
                 let status = match command {
                     Some(ref cmd) => {
-                        let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
-                        let result = std::process::Command::new(&shell)
-                            .arg("-c")
-                            .arg(cmd)
-                            .current_dir(&root)
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::piped())
-                            .output();
-                        match result {
-                            Ok(out) if out.status.success() => CheckResult::Passed,
-                            Ok(out) => CheckResult::Failed(
-                                String::from_utf8_lossy(&out.stderr).into_owned(),
-                            ),
-                            Err(e) => CheckResult::Failed(e.to_string()),
+                        let (exit_code, stderr) = crate::check::run_command(cmd, &root, timeout);
+                        if exit_code == 0 {
+                            CheckResult::Passed
+                        } else {
+                            CheckResult::Failed(stderr)
                         }
                     }
                     None => CheckResult::Manual,
@@ -1759,6 +1753,87 @@ mod tests {
         form.fields[0].cursor = 3; // before é
         form.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::empty()));
         assert_eq!(form.fields[0].cursor, 5); // after é
+    }
+
+    // === Bulk check timeout ===
+
+    #[test]
+    fn test_bulk_check_timeout_slow_command_fails() {
+        let (_dir, mut app) = temp_app("- label: slow fact\n  command: sleep 10\n");
+        app.check_timeout = Some(Duration::from_millis(100));
+        app.start_check();
+        // Poll until the background thread finishes
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+        assert!(!app.check_running);
+        assert_eq!(app.check_failed, 1);
+        assert_eq!(app.check_passed, 0);
+        assert_eq!(app.check_manual, 0);
+        let result = app.check_results.get(&0).unwrap();
+        match result {
+            CheckResult::Failed(msg) => assert!(msg.contains("timed out")),
+            other => panic!("Expected Failed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_bulk_check_timeout_quick_command_passes() {
+        let (_dir, mut app) = temp_app("- label: quick fact\n  command: true\n");
+        app.check_timeout = Some(Duration::from_secs(5));
+        app.start_check();
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+        assert!(!app.check_running);
+        assert_eq!(app.check_passed, 1);
+        assert_eq!(app.check_failed, 0);
+        assert_eq!(app.check_manual, 0);
+        let result = app.check_results.get(&0).unwrap();
+        assert!(matches!(result, CheckResult::Passed));
+    }
+
+    #[test]
+    fn test_bulk_check_timeout_manual_fact_skips_command() {
+        let (_dir, mut app) = temp_app("- manual fact\n");
+        app.check_timeout = Some(Duration::from_secs(5));
+        app.start_check();
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+        assert!(!app.check_running);
+        assert_eq!(app.check_passed, 0);
+        assert_eq!(app.check_failed, 0);
+        assert_eq!(app.check_manual, 1);
+        let result = app.check_results.get(&0).unwrap();
+        assert!(matches!(result, CheckResult::Manual));
+    }
+
+    #[test]
+    fn test_bulk_check_default_timeout_is_30s() {
+        let (_dir, app) = temp_app("- label: fact\n  command: true\n");
+        assert_eq!(app.check_timeout, Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn test_bulk_check_no_timeout_runs_without_limit() {
+        let (_dir, mut app) = temp_app("- label: fact\n  command: true\n");
+        app.check_timeout = None;
+        app.start_check();
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+        assert!(!app.check_running);
+        assert_eq!(app.check_passed, 1);
+        assert_eq!(app.check_failed, 0);
     }
 }
 
