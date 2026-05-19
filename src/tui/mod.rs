@@ -1087,6 +1087,48 @@ fn cleanup_terminal() {
     );
 }
 
+pub fn run() -> Result<()> {
+    let (root, no_git) = match project::find_project_root() {
+        Ok(root) => (root, false),
+        Err(_) => (std::env::current_dir()?, true),
+    };
+
+    terminal::enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    crossterm::execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        cleanup_terminal();
+        original_hook(info);
+    }));
+
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = App::new(root, no_git)?;
+
+    loop {
+        terminal.draw(|frame| ui::draw(frame, &mut app))?;
+
+        if event::poll(Duration::from_millis(50))? {
+            match event::read()? {
+                Event::Key(key) if app.handle_key(key)? => {
+                    break;
+                }
+                Event::Mouse(mouse) => app.handle_mouse(mouse),
+                _ => {}
+            }
+        }
+
+        app.process_check_results();
+    }
+
+    cleanup_terminal();
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1835,46 +1877,4 @@ mod tests {
         assert_eq!(app.check_passed, 1);
         assert_eq!(app.check_failed, 0);
     }
-}
-
-pub fn run() -> Result<()> {
-    let (root, no_git) = match project::find_project_root() {
-        Ok(root) => (root, false),
-        Err(_) => (std::env::current_dir()?, true),
-    };
-
-    terminal::enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    crossterm::execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-
-    let original_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        cleanup_terminal();
-        original_hook(info);
-    }));
-
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let mut app = App::new(root, no_git)?;
-
-    loop {
-        terminal.draw(|frame| ui::draw(frame, &mut app))?;
-
-        if event::poll(Duration::from_millis(50))? {
-            match event::read()? {
-                Event::Key(key) if app.handle_key(key)? => {
-                    break;
-                }
-                Event::Mouse(mouse) => app.handle_mouse(mouse),
-                _ => {}
-            }
-        }
-
-        app.process_check_results();
-    }
-
-    cleanup_terminal();
-
-    Ok(())
 }
