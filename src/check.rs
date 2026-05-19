@@ -303,10 +303,10 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
                 continue;
             }
 
-            if let Some(depth) = opts.depth {
-                if section_path.len() > depth {
-                    continue;
-                }
+            if let Some(depth) = opts.depth
+                && section_path.len() > depth
+            {
+                continue;
             }
 
             if let Some(ref expr) = opts.search_expr {
