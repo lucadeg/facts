@@ -47,6 +47,10 @@ fn detect_install_method(exe: &Path) -> InstallMethod {
 }
 
 fn update_npm() -> Result<()> {
+    let downloader = find_downloader()?;
+    if needs_update(downloader)?.is_none() {
+        return Ok(());
+    }
     println!("detected npm install, running: npm update -g @avcodes/facts");
     let status = Command::new("npm")
         .args(["update", "-g", "@avcodes/facts"])
@@ -59,6 +63,10 @@ fn update_npm() -> Result<()> {
 }
 
 fn update_pipx() -> Result<()> {
+    let downloader = find_downloader()?;
+    if needs_update(downloader)?.is_none() {
+        return Ok(());
+    }
     println!("detected pipx install, running: pipx upgrade facts-cli");
     let status = Command::new("pipx")
         .args(["upgrade", "facts-cli"])
@@ -72,14 +80,11 @@ fn update_pipx() -> Result<()> {
 
 fn update_direct(exe: &Path) -> Result<()> {
     let downloader = find_downloader()?;
-
-    let latest_tag = get_latest_version(downloader)?;
+    let latest_tag = match needs_update(downloader)? {
+        None => return Ok(()),
+        Some(tag) => tag,
+    };
     let latest_version = latest_tag.strip_prefix('v').unwrap_or(&latest_tag);
-
-    if latest_version == VERSION {
-        println!("already up to date (v{})", VERSION);
-        return Ok(());
-    }
 
     let target = detect_platform()?;
     let url = format!(
@@ -147,6 +152,27 @@ fn find_downloader() -> Result<&'static str> {
         }
     }
     bail!("curl or wget is required for self-update");
+}
+
+/// Returns true when `latest_tag` resolves to the same version as `current`.
+fn is_up_to_date(current: &str, latest_tag: &str) -> bool {
+    let latest_version = latest_tag.strip_prefix('v').unwrap_or(latest_tag);
+    if latest_version == current {
+        println!("already up to date (v{})", current);
+        true
+    } else {
+        false
+    }
+}
+
+/// Fetches the latest release tag and returns `None` when already up to date.
+fn needs_update(downloader: &str) -> Result<Option<String>> {
+    let latest_tag = get_latest_version(downloader)?;
+    if is_up_to_date(VERSION, &latest_tag) {
+        Ok(None)
+    } else {
+        Ok(Some(latest_tag))
+    }
 }
 
 fn parse_latest_version(body: &str) -> Result<String> {
@@ -487,6 +513,34 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("archive.tar.gz");
         let result = download("http://example.com/test.tar.gz", &dest, "fake_downloader");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("unsupported downloader"), "error should mention unsupported downloader: {err}");
+    }
+
+    #[test]
+    fn test_is_up_to_date_same_with_v_prefix() {
+        assert!(is_up_to_date("0.6.0", "v0.6.0"));
+    }
+
+    #[test]
+    fn test_is_up_to_date_same_without_prefix() {
+        assert!(is_up_to_date("0.6.0", "0.6.0"));
+    }
+
+    #[test]
+    fn test_is_up_to_date_different_with_v_prefix() {
+        assert!(!is_up_to_date("0.6.0", "v0.7.0"));
+    }
+
+    #[test]
+    fn test_is_up_to_date_different_without_prefix() {
+        assert!(!is_up_to_date("0.6.0", "0.7.0"));
+    }
+
+    #[test]
+    fn test_needs_update_unsupported_downloader() {
+        let result = needs_update("fake_downloader");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("unsupported downloader"), "error should mention unsupported downloader: {err}");
