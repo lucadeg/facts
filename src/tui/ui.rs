@@ -303,86 +303,128 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(table, area, &mut app.table_state);
 }
 
-fn shortcut(key: &str, label: &str) -> Vec<Span<'static>> {
-    vec![
-        Span::styled(
-            format!(" {key}"),
-            Style::default()
-                .fg(theme::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(format!(" {label}"), Style::default().fg(theme::TEXT)),
-    ]
+fn shortcut_items_for_mode(app: &App) -> Vec<(&'static str, &'static str)> {
+    match app.mode {
+        Mode::Browse if app.show_tree && app.tree_focused => vec![
+            ("↑↓", "nav"),
+            ("l", "expand"),
+            ("h", "collapse"),
+            ("Tab", "table"),
+            ("a", "add here"),
+            ("t", "hide tree"),
+            ("?", "help"),
+            ("q", "quit"),
+        ],
+        Mode::Browse => {
+            let mut v = vec![
+                ("↑↓", "nav"),
+                ("/", "filter"),
+                ("Enter", "detail"),
+                ("a", "add"),
+                ("e", "edit"),
+                ("d", "del"),
+                ("m", "move"),
+                ("x", "check one"),
+            ];
+            if app.show_tree {
+                v.push(("Tab", "tree"));
+            }
+            v.push(("t", "sections"));
+            if app.check_running {
+                v.push(("C", "cancel"));
+            } else {
+                v.push(("c", "check all"));
+            }
+            v.push(("?", "help"));
+            v.push(("q", "quit"));
+            v
+        }
+        Mode::Filter => vec![
+            ("Tab", "next field"),
+            ("S-Tab", "prev field"),
+            ("Ctrl-U", "clear"),
+            ("Enter", "done"),
+            ("Esc", "cancel"),
+        ],
+        Mode::Help => vec![
+            ("q", "close"),
+            ("Esc", "close"),
+        ],
+        Mode::Detail => vec![
+            ("x", "check"),
+            ("e", "edit"),
+            ("d", "del"),
+            ("q", "close"),
+            ("Esc", "close"),
+        ],
+        Mode::ConfirmDelete => vec![
+            ("y", "confirm"),
+            ("n", "cancel"),
+            ("Esc", "cancel"),
+        ],
+        Mode::Form => vec![
+            ("Tab", "next field"),
+            ("S-Tab", "prev field"),
+            ("Ctrl-S", "submit"),
+            ("Ctrl-U", "clear field"),
+            ("Esc", "cancel"),
+        ],
+    }
 }
 
-fn draw_shortcuts(frame: &mut Frame, app: &App, area: Rect) {
-    let mut spans: Vec<Span> = Vec::new();
-    spans.push(Span::styled(" ", Style::default()));
+fn build_shortcut_spans(items: &[(&str, &str)], max_width: usize) -> Vec<Span<'static>> {
+    fn total_width(spans: &[Span]) -> usize {
+        spans.iter().map(|s| s.width()).sum()
+    }
 
-    match app.mode {
-        Mode::Browse if app.show_tree && app.tree_focused => {
-            spans.extend(shortcut("↑↓", "nav"));
-            spans.extend(shortcut("l", "expand"));
-            spans.extend(shortcut("h", "collapse"));
-            spans.extend(shortcut("Tab", "table"));
-            spans.extend(shortcut("a", "add here"));
-            spans.extend(shortcut("t", "hide tree"));
-            spans.extend(shortcut("?", "help"));
-            spans.extend(shortcut("q", "quit"));
-        }
-        Mode::Browse => {
-            spans.extend(shortcut("↑↓", "nav"));
-            spans.extend(shortcut("/", "filter"));
-            spans.extend(shortcut("Enter", "detail"));
-            spans.extend(shortcut("a", "add"));
-            spans.extend(shortcut("e", "edit"));
-            spans.extend(shortcut("d", "del"));
-            spans.extend(shortcut("m", "move"));
-            spans.extend(shortcut("x", "check one"));
-            if app.show_tree {
-                spans.extend(shortcut("Tab", "tree"));
+    fn make_spans(items: &[(&str, &str)], keys_only: bool) -> Vec<Span<'static>> {
+        let mut spans = vec![Span::styled(" ", Style::default())];
+        for (key, label) in items {
+            spans.push(Span::styled(
+                format!(" {key}"),
+                Style::default()
+                    .fg(theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            if !keys_only {
+                spans.push(Span::styled(
+                    format!(" {label}"),
+                    Style::default().fg(theme::TEXT),
+                ));
             }
-            spans.extend(shortcut("t", "sections"));
-            if app.check_running {
-                spans.extend(shortcut("C", "cancel"));
-            } else {
-                spans.extend(shortcut("c", "check all"));
+        }
+        spans
+    }
+
+    fn truncate_spans(spans: &mut Vec<Span<'static>>, max_width: usize) {
+        while spans.len() > 1 {
+            let w = total_width(spans);
+            if w <= max_width {
+                break;
             }
-            spans.extend(shortcut("?", "help"));
-            spans.extend(shortcut("q", "quit"));
+            spans.pop();
         }
-        Mode::Filter => {
-            spans.extend(shortcut("Tab", "next field"));
-            spans.extend(shortcut("S-Tab", "prev field"));
-            spans.extend(shortcut("Ctrl-U", "clear"));
-            spans.extend(shortcut("Enter", "done"));
-            spans.extend(shortcut("Esc", "cancel"));
+        if total_width(spans) > max_width && spans.len() > 1 {
+            spans.truncate(1);
         }
-        Mode::Help => {
-            spans.extend(shortcut("q", "close"));
-            spans.extend(shortcut("Esc", "close"));
-        }
-        Mode::Detail => {
-            spans.extend(shortcut("x", "check"));
-            spans.extend(shortcut("e", "edit"));
-            spans.extend(shortcut("d", "del"));
-            spans.extend(shortcut("q", "close"));
-            spans.extend(shortcut("Esc", "close"));
-        }
-        Mode::ConfirmDelete => {
-            spans.extend(shortcut("y", "confirm"));
-            spans.extend(shortcut("n", "cancel"));
-            spans.extend(shortcut("Esc", "cancel"));
-        }
-        Mode::Form => {
-            spans.extend(shortcut("Tab", "next field"));
-            spans.extend(shortcut("S-Tab", "prev field"));
-            spans.extend(shortcut("Ctrl-S", "submit"));
-            spans.extend(shortcut("Ctrl-U", "clear field"));
-            spans.extend(shortcut("Esc", "cancel"));
+        if spans.len() > 1 && total_width(spans) + 2 <= max_width {
+            spans.push(Span::styled(" …", Style::default().fg(theme::MUTED)));
         }
     }
 
+    let mut spans = make_spans(items, false);
+    if total_width(&spans) > max_width {
+        spans = make_spans(items, true);
+    }
+    if total_width(&spans) > max_width {
+        truncate_spans(&mut spans, max_width);
+    }
+    spans
+}
+
+fn draw_shortcuts(frame: &mut Frame, app: &App, area: Rect) {
+    let items = shortcut_items_for_mode(app);
+    let spans = build_shortcut_spans(&items, area.width as usize);
     let bar = Paragraph::new(Line::from(spans)).style(Style::default().bg(theme::BG));
     frame.render_widget(bar, area);
 }
@@ -998,4 +1040,134 @@ fn centered_rect_fixed(width: u16, height: u16, r: Rect) -> Rect {
     let x = r.x + r.width.saturating_sub(width) / 2;
     let y = r.y + r.height.saturating_sub(height) / 2;
     Rect::new(x, y, width.min(r.width), height.min(r.height))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn temp_app(content: &str) -> (TempDir, App) {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(dir.path().join(".facts"), content).unwrap();
+        let app = App::new(dir.path().to_path_buf(), false).unwrap();
+        (dir, app)
+    }
+
+    #[test]
+    fn test_full_labels_on_wide_terminal() {
+        let items = vec![
+            ("↑↓", "nav"),
+            ("/", "filter"),
+            ("Enter", "detail"),
+            ("a", "add"),
+            ("e", "edit"),
+            ("d", "del"),
+            ("q", "quit"),
+        ];
+        let spans = build_shortcut_spans(&items, 100);
+        let text = spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        assert!(text.contains("nav"));
+        assert!(text.contains("filter"));
+        assert!(text.contains("detail"));
+        assert!(text.contains("add"));
+        assert!(text.contains("edit"));
+        assert!(text.contains("del"));
+        assert!(text.contains("quit"));
+    }
+
+    #[test]
+    fn test_keys_only_on_medium_terminal() {
+        let items = vec![
+            ("↑↓", "nav"),
+            ("/", "filter"),
+            ("Enter", "detail"),
+            ("a", "add"),
+        ];
+        // Full labels exceed width 20; keys-only (width 14) fits.
+        let spans = build_shortcut_spans(&items, 20);
+        let text = spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        assert!(text.contains("↑↓"));
+        assert!(!text.contains("nav"));
+        assert!(!text.contains("filter"));
+        assert!(!text.contains("detail"));
+        assert!(!text.contains("add"));
+    }
+
+    #[test]
+    fn test_truncation_on_narrow_terminal() {
+        let items = vec![
+            ("↑↓", "nav"),
+            ("/", "filter"),
+            ("Enter", "detail"),
+            ("a", "add"),
+            ("q", "quit"),
+        ];
+        // Keys-only is 16 chars; at width 10 it must truncate.
+        let spans = build_shortcut_spans(&items, 10);
+        let text = spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        assert!(text.contains("↑↓"));
+        assert!(!text.contains("Enter"));
+        assert!(!text.contains("quit"));
+    }
+
+    #[test]
+    fn test_ellipsis_when_partially_truncated() {
+        let items = vec![
+            ("↑↓", "nav"),
+            ("/", "filter"),
+            ("Enter", "detail"),
+            ("Ctrl-S", "submit"),
+        ];
+        // Keys-only is 19 chars; at width 16 we truncate off " Ctrl-S" (7), leaving 12,
+        // and have room for " …" (2) since 12+2=14 <= 16.
+        let spans = build_shortcut_spans(&items, 16);
+        let text = spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        assert!(text.contains("…"));
+        assert!(text.contains("↑↓"));
+        assert!(!text.contains("Ctrl-S"));
+    }
+
+    #[test]
+    fn test_no_ellipsis_when_too_narrow() {
+        let items = vec![
+            ("↑↓", "nav"),
+            ("/", "filter"),
+            ("Enter", "detail"),
+        ];
+        // Keys-only is 12 chars; at width 4 we can only fit the leading space + first key (4).
+        let spans = build_shortcut_spans(&items, 4);
+        let text = spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        assert!(text.contains("↑↓"));
+        assert!(!text.contains("…"));
+    }
+
+    #[test]
+    fn test_shortcut_items_browse_mode() {
+        let (_dir, app) = temp_app("- first\n- second\n");
+        let items = shortcut_items_for_mode(&app);
+        assert!(items.iter().any(|(k, l)| *k == "↑↓" && *l == "nav"));
+        assert!(items.iter().any(|(k, l)| *k == "a" && *l == "add"));
+        assert!(items.iter().any(|(k, l)| *k == "q" && *l == "quit"));
+        assert!(!items.iter().any(|(k, _)| *k == "Tab"));
+    }
+
+    #[test]
+    fn test_shortcut_items_browse_with_tree() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.show_tree = true;
+        let items = shortcut_items_for_mode(&app);
+        assert!(items.iter().any(|(k, _)| *k == "Tab"));
+    }
+
+    #[test]
+    fn test_shortcut_items_filter_mode() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.mode = Mode::Filter;
+        let items = shortcut_items_for_mode(&app);
+        assert!(items.iter().any(|(k, l)| *k == "Tab" && *l == "next field"));
+        assert!(items.iter().any(|(k, l)| *k == "Esc" && *l == "cancel"));
+    }
 }
