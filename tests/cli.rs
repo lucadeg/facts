@@ -3925,6 +3925,83 @@ fn fmt_preserves_raw_fact_on_malformed_bracket_tags() {
 }
 
 #[test]
+fn fmt_check_passes_when_no_changes_needed() {
+    let content = "# section\n\n- label: a fact\n  command: echo hi\n  tags: [mvp]\n";
+    let dir = project(content);
+    facts_cmd(&dir)
+        .args(["fmt", "--check"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn fmt_check_fails_when_file_would_change() {
+    // Input has trailing blank lines that fmt will normalize away.
+    let dir = project("# section\n\n- fact one\n\n- fact two\n\n\n");
+    facts_cmd(&dir)
+        .args(["fmt", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("would reformat"));
+
+    // File must NOT have been modified.
+    let after = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert!(after.ends_with("\n\n\n"));
+}
+
+#[test]
+fn fmt_check_reports_multiple_files() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    fs::write(
+        dir.path().join("a.facts"),
+        "# section\n\n- fact a\n\n\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("b.facts"),
+        "# section\n\n- fact b\n\n\n",
+    )
+    .unwrap();
+
+    facts_cmd(&dir)
+        .args(["fmt", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("a.facts"))
+        .stderr(predicate::str::contains("b.facts"));
+}
+
+#[test]
+fn fmt_check_aborts_on_lint_errors() {
+    let dir = project("- label: good fact\n  badkey: nope\n");
+    facts_cmd(&dir)
+        .args(["fmt", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("error"));
+}
+
+#[test]
+fn fmt_check_no_facts_files_exits_nonzero() {
+    let dir = empty_project();
+    facts_cmd(&dir)
+        .args(["fmt", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no .facts files found"));
+}
+
+#[test]
+fn fmt_without_check_modifies_files() {
+    let dir = project("# section\n\n- fact one\n\n\n");
+    facts_cmd(&dir).arg("fmt").assert().success();
+
+    let after = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert!(!after.ends_with("\n\n\n"));
+}
+
+#[test]
 fn lint_warns_unclosed_bracket_tags() {
     let dir = project("- label: test fact\n  tags: [mvp, core\n");
     facts_cmd(&dir)

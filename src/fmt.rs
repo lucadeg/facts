@@ -6,8 +6,18 @@ use crate::parser;
 use crate::project;
 use crate::writer;
 
+/// Options for the fmt command.
+pub struct FmtOptions {
+    /// When true, files are not modified; exit non-zero if any would change.
+    pub check: bool,
+}
+
 /// Run the fmt subcommand.
-pub fn run() -> Result<()> {
+///
+/// When `opts.check` is true, files are not modified. Returns `true` if all
+/// files are already formatted (or would be in check mode), `false` if any
+/// file would be changed.
+pub fn run(opts: &FmtOptions) -> Result<bool> {
     let root = project::find_project_root()?;
     let files = project::discover_fact_files(&root)?;
 
@@ -42,6 +52,7 @@ pub fn run() -> Result<()> {
     }
 
     // Parse and write back each file.
+    let mut would_change = false;
     for path in &files {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
@@ -53,10 +64,15 @@ pub fn run() -> Result<()> {
             .with_context(|| format!("failed to parse {}", path.display()))?;
         let output = writer::write(&sheet);
         if output != content {
-            std::fs::write(path, &output)
-                .with_context(|| format!("failed to write {}", path.display()))?;
+            would_change = true;
+            if opts.check {
+                eprintln!("would reformat {}", path.display());
+            } else {
+                std::fs::write(path, &output)
+                    .with_context(|| format!("failed to write {}", path.display()))?;
+            }
         }
     }
 
-    Ok(())
+    Ok(!would_change)
 }

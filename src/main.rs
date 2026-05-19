@@ -196,7 +196,12 @@ enum Command {
     },
 
     /// Parse, validate, and normalize all .facts files.
-    Fmt,
+    Fmt {
+        /// Check formatting without modifying files; exit non-zero if any file
+        /// would be reformatted.
+        #[arg(long)]
+        check: bool,
+    },
 
     /// Scaffold a .facts file and install agent skills.
     Init {
@@ -422,8 +427,12 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
         }
-        Some(Command::Fmt) => {
-            fmt::run()?;
+        Some(Command::Fmt { check }) => {
+            let opts = fmt::FmtOptions { check };
+            let all_formatted = fmt::run(&opts)?;
+            if check && !all_formatted {
+                std::process::exit(1);
+            }
         }
         Some(Command::Init { name }) => {
             init::run(name.as_deref())?;
