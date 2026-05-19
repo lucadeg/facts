@@ -24,11 +24,11 @@ pub fn run() -> Result<()> {
         InstallMethod::Direct => update_direct(&exe)?,
     }
 
-    if let Ok(root) = project::find_project_root() {
-        if root.join(".facts").is_file() {
-            println!();
-            init::run(None)?;
-        }
+    if let Ok(root) = project::find_project_root()
+        && root.join(".facts").is_file()
+    {
+        println!();
+        init::run(None)?;
     }
 
     Ok(())
@@ -87,9 +87,17 @@ fn update_direct(exe: &Path) -> Result<()> {
     println!("updating v{VERSION} → v{latest_version}...");
 
     let tmpdir = tempdir()?;
+    let _cleanup = TempDirGuard(&tmpdir);
     let archive = tmpdir.join("download.tar.gz");
 
     download(&url, &archive)?;
+
+    let meta = std::fs::metadata(&archive)
+        .with_context(|| format!("downloaded archive missing: {}", archive.display()))?;
+    if meta.len() == 0 {
+        bail!("downloaded archive is empty");
+    }
+
     extract(&archive, &tmpdir)?;
 
     let new_binary = tmpdir.join(BINARY);
@@ -100,7 +108,6 @@ fn update_direct(exe: &Path) -> Result<()> {
     replace_binary(&new_binary, exe)?;
     println!("updated v{VERSION} → v{latest_version}");
 
-    std::fs::remove_dir_all(&tmpdir).ok();
     Ok(())
 }
 
@@ -230,20 +237,37 @@ fn replace_binary(src: &Path, dest: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp_dest, std::fs::Permissions::from_mode(0o755))
-            .context("failed to set permissions")?;
+        if let Err(e) = std::fs::set_permissions(&tmp_dest, std::fs::Permissions::from_mode(0o755))
+            .context("failed to set permissions")
+        {
+            std::fs::remove_file(&tmp_dest).ok();
+            return Err(e);
+        }
     }
 
-    std::fs::rename(&tmp_dest, dest)
-        .with_context(|| format!("failed to replace binary at {}", dest.display()))?;
+    if let Err(e) = std::fs::rename(&tmp_dest, dest)
+        .with_context(|| format!("failed to replace binary at {}", dest.display()))
+    {
+        std::fs::remove_file(&tmp_dest).ok();
+        return Err(e);
+    }
 
     Ok(())
 }
 
 fn tempdir() -> Result<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("facts-update-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("facts-update-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()));
     std::fs::create_dir_all(&dir).context("failed to create temp directory")?;
     Ok(dir)
+}
+
+/// RAII guard that removes a temporary directory on drop.
+struct TempDirGuard<'a>(&'a Path);
+
+impl<'a> Drop for TempDirGuard<'a> {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(self.0).ok();
+    }
 }
 
 #[cfg(test)]
@@ -305,5 +329,78 @@ mod tests {
     fn test_version_is_set() {
         assert!(!VERSION.is_empty());
         assert!(VERSION.contains('.'));
+    }
+
+    #[test]
+    fn test_replace_binary_cleans_up_temp_on_rename_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest_dir = tmp.path().join("dest");
+        std::fs::create_dir_all(&dest_dir).unwrap();
+
+        let src = tmp.path().join("src_bin");
+        std::fs::write(&src, b"new binary").unwrap();
+
+        let dest = dest_dir.join("existing_bin");
+        std::fs::write(&dest, b"old binary").unwrap();
+
+        // Make dest directory read-only so rename fails.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dest_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        }
+
+        let result = replace_binary(&src, &dest);
+        assert!(result.is_err(), "expected rename to fail");
+
+        // Restore permissions so assertion can read the dir.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dest_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let tmp_file = dest_dir.join(".facts.update.tmp");
+        assert!(!tmp_file.exists(), "temp file should be cleaned up after failed rename");
+    }
+
+    #[test]
+    fn test_temp_dir_guard_cleans_up_on_drop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("file.txt"), b"content").unwrap();
+
+        {
+            let guard = TempDirGuard(&nested);
+            assert!(nested.exists());
+            drop(guard);
+        }
+
+        assert!(!nested.exists(), "TempDirGuard should remove directory on drop");
+    }
+
+    #[test]
+    fn test_temp_dir_guard_cleans_up_nested_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("a").join("b").join("c");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("file.txt"), b"content").unwrap();
+
+        {
+            let top = tmp.path().join("a");
+            let guard = TempDirGuard(top.as_path());
+            drop(guard);
+        }
+
+        assert!(!tmp.path().join("a").exists());
+    }
+
+    #[test]
+    fn test_tempdir_includes_timestamp() {
+        let d1 = tempdir().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let d2 = tempdir().unwrap();
+        assert_ne!(d1, d2, "consecutive tempdirs should be unique");
     }
 }
