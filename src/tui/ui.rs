@@ -3,10 +3,32 @@ use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use super::form::{FormMode, FormState};
 use super::theme;
 use super::{App, CheckResult, Mode};
+
+fn display_width_before(s: &str, byte_index: usize) -> usize {
+    s[..byte_index.min(s.len())].width()
+}
+
+fn filter_prefix_width(app: &App) -> usize {
+    let search_w = app.search.width();
+    match app.filter_field {
+        0 => 2,                       // " /"
+        1 => 2 + search_w + 3,        // " /" + search + "  @"
+        2 => {
+            let tags_w = if app.tags_filter.is_empty() {
+                0
+            } else {
+                3 + app.tags_filter.width() // "  @" + tags text
+            };
+            2 + search_w + tags_w + 3 // " /" + search + [tags] + "  #"
+        }
+        _ => 2,
+    }
+}
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -160,35 +182,15 @@ fn draw_filter_bar(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(bar, area);
 
     if is_filter {
-        let (prefix_width, field_val) = match app.filter_field {
-            0 => (2usize, &app.search),
-            1 => {
-                let w =
-                    2 + if app.search.is_empty() {
-                        6
-                    } else {
-                        app.search.len()
-                    } + 3;
-                (w, &app.tags_filter)
-            }
-            2 => {
-                let search_w = if app.search.is_empty() {
-                    6
-                } else {
-                    app.search.len()
-                };
-                let tags_prefix = if app.tags_filter.is_empty() {
-                    0
-                } else {
-                    3 + app.tags_filter.len()
-                };
-                let w = 2 + search_w + 3 + tags_prefix + 3;
-                (w, &app.section_filter)
-            }
-            _ => (2, &app.search),
+        let prefix_width = filter_prefix_width(app);
+        let field_val = match app.filter_field {
+            0 => &app.search,
+            1 => &app.tags_filter,
+            2 => &app.section_filter,
+            _ => &app.search,
         };
-        let _ = field_val;
-        let cx = area.x + prefix_width as u16 + app.filter_cursor as u16;
+        let cursor_w = display_width_before(field_val, app.filter_cursor);
+        let cx = area.x + prefix_width as u16 + cursor_w as u16;
         frame.set_cursor_position(Position::new(
             cx.min(area.right().saturating_sub(1)),
             area.y,
@@ -991,7 +993,8 @@ pub fn draw_form(frame: &mut Frame, form: &FormState, area: Rect) {
         );
 
         if is_focused {
-            let cx = field_chunks[1].x + 1 + field.cursor as u16;
+            let cursor_w = display_width_before(&field.value, field.cursor);
+            let cx = field_chunks[1].x + 1 + cursor_w as u16;
             frame.set_cursor_position(Position::new(
                 cx.min(field_chunks[1].right().saturating_sub(1)),
                 field_chunks[1].y,
@@ -1169,5 +1172,112 @@ mod tests {
         let items = shortcut_items_for_mode(&app);
         assert!(items.iter().any(|(k, l)| *k == "Tab" && *l == "next field"));
         assert!(items.iter().any(|(k, l)| *k == "Esc" && *l == "cancel"));
+    }
+
+    // === Unicode cursor positioning ===
+
+    #[test]
+    fn test_display_width_before_ascii() {
+        assert_eq!(display_width_before("hello", 3), 3);
+    }
+
+    #[test]
+    fn test_display_width_before_latin1() {
+        // "café" — é is U+00E9 (2 bytes, 1 display column)
+        assert_eq!(display_width_before("café", 5), 4);
+    }
+
+    #[test]
+    fn test_display_width_before_cjk() {
+        // "中文" — each CJK char is 3 bytes, 2 display columns
+        assert_eq!(display_width_before("中文", 3), 2);
+        assert_eq!(display_width_before("中文", 6), 4);
+    }
+
+    #[test]
+    fn test_display_width_before_emoji() {
+        // "a😀b" — 😀 is 4 bytes, 2 display columns
+        assert_eq!(display_width_before("a😀b", 5), 3); // a + 😀
+        assert_eq!(display_width_before("a😀b", 6), 4); // a + 😀 + b
+    }
+
+    #[test]
+    fn test_display_width_before_zero_width() {
+        // "a\u{0300}b" — combining grave accent is 0 display columns
+        assert_eq!(display_width_before("a\u{0300}b", 4), 2);
+    }
+
+    #[test]
+    fn test_display_width_before_clamps_out_of_bounds() {
+        assert_eq!(display_width_before("hi", 10), 2);
+    }
+
+    #[test]
+    fn test_filter_prefix_width_field0() {
+        let (_dir, app) = temp_app("- first\n- second\n");
+        assert_eq!(filter_prefix_width(&app), 2); // " /"
+    }
+
+    #[test]
+    fn test_filter_prefix_width_field1_empty_search() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.mode = Mode::Filter;
+        app.filter_field = 1;
+        assert_eq!(filter_prefix_width(&app), 5); // " /" + "" + "  @"
+    }
+
+    #[test]
+    fn test_filter_prefix_width_field1_ascii_search() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.mode = Mode::Filter;
+        app.search = "foo".into();
+        app.filter_field = 1;
+        assert_eq!(filter_prefix_width(&app), 8); // " /" + "foo" + "  @"
+    }
+
+    #[test]
+    fn test_filter_prefix_width_field1_unicode_search() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.mode = Mode::Filter;
+        app.search = "café".into();
+        app.filter_field = 1;
+        assert_eq!(filter_prefix_width(&app), 9); // " /" + "café" (4 cols) + "  @"
+    }
+
+    #[test]
+    fn test_filter_prefix_width_field2_empty() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.mode = Mode::Filter;
+        app.filter_field = 2;
+        assert_eq!(filter_prefix_width(&app), 5); // " /" + "" + "  #"
+    }
+
+    #[test]
+    fn test_filter_prefix_width_field2_with_tags() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.mode = Mode::Filter;
+        app.search = "foo".into();
+        app.tags_filter = "mv".into();
+        app.filter_field = 2;
+        assert_eq!(filter_prefix_width(&app), 13); // " /" + "foo" + "  @" + "mv" + "  #"
+    }
+
+    #[test]
+    fn test_filter_prefix_width_field2_unicode_tags() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.mode = Mode::Filter;
+        app.search = "café".into();
+        app.tags_filter = "中".into();
+        app.filter_field = 2;
+        assert_eq!(filter_prefix_width(&app), 14); // " /" + 4 + "  @" + 2 + "  #"
+    }
+
+    #[test]
+    fn test_filter_prefix_width_field2_cjk_search() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.mode = Mode::Filter;
+        app.search = "中文".into();
+        app.filter_field = 2;
+        assert_eq!(filter_prefix_width(&app), 9); // " /" + 4 + "  #"
     }
 }

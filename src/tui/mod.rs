@@ -1639,6 +1639,127 @@ mod tests {
         assert!(app.status.contains("Parse error"));
         assert!(app.display_facts.is_empty());
     }
+
+    // === Unicode cursor positioning ===
+
+    #[test]
+    fn test_filter_typing_unicode_cursor() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.mode = Mode::Filter;
+        app.filter_field = 0;
+        app.filter_cursor = 0;
+
+        // Type "café" (c=1, a=1, f=1, é=2 bytes, 1 display col)
+        for c in "café".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()))
+                .unwrap();
+        }
+        assert_eq!(app.search, "café");
+        assert_eq!(app.filter_cursor, 5); // byte index at end
+    }
+
+    #[test]
+    fn test_filter_typing_cjk_cursor() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.mode = Mode::Filter;
+        app.filter_field = 0;
+        app.filter_cursor = 0;
+
+        // Type "中文" (each char = 3 bytes, 2 display cols)
+        for c in "中文".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()))
+                .unwrap();
+        }
+        assert_eq!(app.search, "中文");
+        assert_eq!(app.filter_cursor, 6); // byte index at end
+    }
+
+    #[test]
+    fn test_filter_typing_emoji_cursor() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.mode = Mode::Filter;
+        app.filter_field = 0;
+        app.filter_cursor = 0;
+
+        // Type "a😀b" (😀 = 4 bytes, 2 display cols)
+        for c in "a😀b".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()))
+                .unwrap();
+        }
+        assert_eq!(app.search, "a😀b");
+        assert_eq!(app.filter_cursor, 6); // byte index at end (1 + 4 + 1)
+    }
+
+    #[test]
+    fn test_form_unicode_typing() {
+        let mut form = FormState::new_add();
+        for c in "café".chars() {
+            form.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+        }
+        assert_eq!(form.fields[0].value, "café");
+        assert_eq!(form.fields[0].cursor, 5); // byte index at end
+    }
+
+    #[test]
+    fn test_form_cjk_typing() {
+        let mut form = FormState::new_add();
+        for c in "中文".chars() {
+            form.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+        }
+        assert_eq!(form.fields[0].value, "中文");
+        assert_eq!(form.fields[0].cursor, 6); // byte index at end
+    }
+
+    #[test]
+    fn test_form_emoji_typing() {
+        let mut form = FormState::new_add();
+        for c in "a😀b".chars() {
+            form.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+        }
+        assert_eq!(form.fields[0].value, "a😀b");
+        assert_eq!(form.fields[0].cursor, 6); // byte index at end (1 + 4 + 1)
+    }
+
+    #[test]
+    fn test_form_unicode_delete_back() {
+        let mut form = FormState::new_add();
+        for c in "café".chars() {
+            form.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+        }
+        assert_eq!(form.fields[0].cursor, 5);
+        // Backspace over é (2 bytes)
+        form.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
+        assert_eq!(form.fields[0].value, "caf");
+        assert_eq!(form.fields[0].cursor, 3);
+    }
+
+    #[test]
+    fn test_form_unicode_delete_forward() {
+        let mut form = FormState::new_add();
+        form.fields[0].value = "café".into();
+        form.fields[0].cursor = 3; // between f and é
+        form.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::empty()));
+        assert_eq!(form.fields[0].value, "caf");
+        assert_eq!(form.fields[0].cursor, 3);
+    }
+
+    #[test]
+    fn test_form_unicode_move_left() {
+        let mut form = FormState::new_add();
+        form.fields[0].value = "café".into();
+        form.fields[0].cursor = 5; // after é
+        form.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::empty()));
+        assert_eq!(form.fields[0].cursor, 3); // before é
+    }
+
+    #[test]
+    fn test_form_unicode_move_right() {
+        let mut form = FormState::new_add();
+        form.fields[0].value = "café".into();
+        form.fields[0].cursor = 3; // before é
+        form.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::empty()));
+        assert_eq!(form.fields[0].cursor, 5); // after é
+    }
 }
 
 pub fn run() -> Result<()> {
