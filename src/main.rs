@@ -197,6 +197,10 @@ enum Command {
 
     /// Parse, validate, and normalize all .facts files.
     Fmt {
+        /// Format a specific file instead of all *.facts files.
+        #[arg(long)]
+        file: Option<String>,
+
         /// Check formatting without modifying files; exit non-zero if any file
         /// would be reformatted.
         #[arg(long)]
@@ -427,8 +431,8 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
         }
-        Some(Command::Fmt { check }) => {
-            let opts = fmt::FmtOptions { check };
+        Some(Command::Fmt { file, check }) => {
+            let opts = fmt::FmtOptions { file, check };
             let all_formatted = fmt::run(&opts)?;
             if check && !all_formatted {
                 std::process::exit(1);

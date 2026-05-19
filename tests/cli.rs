@@ -4002,6 +4002,78 @@ fn fmt_without_check_modifies_files() {
 }
 
 #[test]
+fn fmt_file_formats_single_file() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    fs::write(dir.path().join(".facts"), "- fact one\n").unwrap();
+    fs::write(dir.path().join("api.facts"), "- fact two\n").unwrap();
+
+    facts_cmd(&dir)
+        .args(["fmt", "--file", "api"])
+        .assert()
+        .success();
+
+    let api_after = fs::read_to_string(dir.path().join("api.facts")).unwrap();
+    assert_eq!(api_after, "- fact two\n");
+
+    let default_after = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert_eq!(default_after, "- fact one\n");
+}
+
+#[test]
+fn fmt_file_nonexistent_errors() {
+    let dir = project("- a fact\n");
+    facts_cmd(&dir)
+        .args(["fmt", "--file", "nonexistent"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("file not found"));
+}
+
+#[test]
+fn fmt_file_check_reports_would_change() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    fs::write(dir.path().join(".facts"), "- fact one\n").unwrap();
+    fs::write(dir.path().join("api.facts"), "# section\n\n- fact two\n\n\n").unwrap();
+
+    facts_cmd(&dir)
+        .args(["fmt", "--file", "api", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("would reformat"));
+
+    let api_after = fs::read_to_string(dir.path().join("api.facts")).unwrap();
+    assert!(api_after.ends_with("\n\n\n"));
+}
+
+#[test]
+fn fmt_file_check_passes_when_no_change_needed() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    fs::write(dir.path().join(".facts"), "# section\n\n- fact one\n\n\n").unwrap();
+    fs::write(dir.path().join("api.facts"), "- fact two\n").unwrap();
+
+    facts_cmd(&dir)
+        .args(["fmt", "--file", "api", "--check"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn fmt_file_is_idempotent() {
+    let content = "# section\n\n- label: a fact\n  command: echo hi\n  tags: [mvp]\n";
+    let dir = project(content);
+    fs::write(dir.path().join("api.facts"), content).unwrap();
+
+    facts_cmd(&dir).args(["fmt", "--file", "api"]).assert().success();
+    facts_cmd(&dir).args(["fmt", "--file", "api"]).assert().success();
+
+    let after = fs::read_to_string(dir.path().join("api.facts")).unwrap();
+    assert_eq!(after, content);
+}
+
+#[test]
 fn lint_warns_unclosed_bracket_tags() {
     let dir = project("- label: test fact\n  tags: [mvp, core\n");
     facts_cmd(&dir)
