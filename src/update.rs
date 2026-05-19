@@ -71,7 +71,9 @@ fn update_pipx() -> Result<()> {
 }
 
 fn update_direct(exe: &Path) -> Result<()> {
-    let latest_tag = get_latest_version()?;
+    let downloader = find_downloader()?;
+
+    let latest_tag = get_latest_version(downloader)?;
     let latest_version = latest_tag.strip_prefix('v').unwrap_or(&latest_tag);
 
     if latest_version == VERSION {
@@ -90,7 +92,7 @@ fn update_direct(exe: &Path) -> Result<()> {
     let _cleanup = TempDirGuard(&tmpdir);
     let archive = tmpdir.join("download.tar.gz");
 
-    download(&url, &archive)?;
+    download(&url, &archive, downloader)?;
 
     let meta = std::fs::metadata(&archive)
         .with_context(|| format!("downloaded archive missing: {}", archive.display()))?;
@@ -157,9 +159,8 @@ fn parse_latest_version(body: &str) -> Result<String> {
     Ok(tag.to_string())
 }
 
-fn get_latest_version() -> Result<String> {
-    let cmd = find_downloader()?;
-    let output = match cmd {
+fn get_latest_version(downloader: &str) -> Result<String> {
+    let output = match downloader {
         "curl" => Command::new("curl")
             .args([
                 "-fsSL",
@@ -174,7 +175,7 @@ fn get_latest_version() -> Result<String> {
             ])
             .output()
             .context("failed to run wget")?,
-        _ => unreachable!(),
+        _ => bail!("unsupported downloader: {downloader}"),
     };
 
     if !output.status.success() {
@@ -185,9 +186,8 @@ fn get_latest_version() -> Result<String> {
     parse_latest_version(&body)
 }
 
-fn download(url: &str, dest: &Path) -> Result<()> {
-    let cmd = find_downloader()?;
-    let status = match cmd {
+fn download(url: &str, dest: &Path, downloader: &str) -> Result<()> {
+    let status = match downloader {
         "curl" => Command::new("curl")
             .args(["-fsSL", url, "-o"])
             .arg(dest)
@@ -199,7 +199,7 @@ fn download(url: &str, dest: &Path) -> Result<()> {
             .arg(url)
             .status()
             .context("failed to run wget")?,
-        _ => unreachable!(),
+        _ => bail!("unsupported downloader: {downloader}"),
     };
 
     if !status.success() {
@@ -473,4 +473,23 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(err.contains("tag_name"), "error should mention tag_name: {err}");
     }
+
+    #[test]
+    fn test_get_latest_version_unsupported_downloader() {
+        let result = get_latest_version("fake_downloader");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("unsupported downloader"), "error should mention unsupported downloader: {err}");
+    }
+
+    #[test]
+    fn test_download_unsupported_downloader() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("archive.tar.gz");
+        let result = download("http://example.com/test.tar.gz", &dest, "fake_downloader");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("unsupported downloader"), "error should mention unsupported downloader: {err}");
+    }
+
 }
