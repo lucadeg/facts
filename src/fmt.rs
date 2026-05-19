@@ -28,6 +28,35 @@ fn resolve_files(root: &Path, opts: &FmtOptions) -> Result<Vec<PathBuf>> {
     }
 }
 
+/// Atomically write `content` to `path` using a temp file in the same
+/// directory, then rename over the original.  If any step fails the temp
+/// file is removed so the destination is either fully updated or untouched.
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let tmp_name = format!(".facts.fmt.{}.{}.tmp", std::process::id(), timestamp);
+    let tmp_path = dir.join(&tmp_name);
+
+    if let Err(e) = std::fs::write(&tmp_path, content)
+        .with_context(|| format!("failed to write temp file {}", tmp_path.display()))
+    {
+        std::fs::remove_file(&tmp_path).ok();
+        return Err(e);
+    }
+
+    if let Err(e) = std::fs::rename(&tmp_path, path)
+        .with_context(|| format!("failed to replace {}", path.display()))
+    {
+        std::fs::remove_file(&tmp_path).ok();
+        return Err(e);
+    }
+
+    Ok(())
+}
+
 /// Run the fmt subcommand.
 ///
 /// When `opts.check` is true, files are not modified. Returns `true` if all
@@ -84,7 +113,7 @@ pub fn run(opts: &FmtOptions) -> Result<bool> {
             if opts.check {
                 eprintln!("would reformat {}", path.display());
             } else {
-                std::fs::write(path, &output)
+                atomic_write(path, &output)
                     .with_context(|| format!("failed to write {}", path.display()))?;
             }
         }
@@ -161,5 +190,62 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(err.contains("file not found"));
         assert!(err.contains("nonexistent.facts"));
+    }
+
+    #[test]
+    fn test_atomic_write_replaces_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.facts");
+        fs::write(&path, "old content").unwrap();
+
+        atomic_write(&path, "new content").unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "new content");
+
+        // No temp file should be left behind.
+        let mut has_tmp = false;
+        for entry in fs::read_dir(dir.path()).unwrap() {
+            let name = entry.unwrap().file_name();
+            if name.to_string_lossy().starts_with(".facts.fmt.") {
+                has_tmp = true;
+            }
+        }
+        assert!(!has_tmp, "temp file should not be left after successful rename");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_atomic_write_cleans_up_temp_on_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("readonly");
+        fs::create_dir_all(&subdir).unwrap();
+        let path = subdir.join("test.facts");
+        fs::write(&path, "original").unwrap();
+
+        // Make directory read-only so both temp-file creation and rename fail.
+        fs::set_permissions(&subdir, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let result = atomic_write(&path, "new content");
+        assert!(result.is_err(), "expected write to fail in read-only directory");
+
+        // Restore permissions so we can inspect the directory.
+        fs::set_permissions(&subdir, fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Original file must be untouched.
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "original");
+
+        // No temp file should remain.
+        let mut has_tmp = false;
+        for entry in fs::read_dir(&subdir).unwrap() {
+            let name = entry.unwrap().file_name();
+            if name.to_string_lossy().starts_with(".facts.fmt.") {
+                has_tmp = true;
+            }
+        }
+        assert!(!has_tmp, "temp file should be cleaned up after failed write");
     }
 }

@@ -4074,6 +4074,61 @@ fn fmt_file_is_idempotent() {
 }
 
 #[test]
+fn fmt_atomic_write_no_temp_file_left() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    fs::write(dir.path().join("a.facts"), "# section\n\n- fact a\n\n\n").unwrap();
+    fs::write(dir.path().join("b.facts"), "# section\n\n- fact b\n\n\n").unwrap();
+
+    facts_cmd(&dir).arg("fmt").assert().success();
+
+    // Ensure no stale temp files remain.
+    let mut has_tmp = false;
+    for entry in fs::read_dir(dir.path()).unwrap() {
+        let name = entry.unwrap().file_name();
+        if name.to_string_lossy().starts_with(".facts.fmt.") {
+            has_tmp = true;
+        }
+    }
+    assert!(!has_tmp, "no temp file should remain after successful fmt");
+}
+
+#[test]
+#[cfg(unix)]
+fn fmt_readonly_directory_fails_and_preserves_files() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    fs::write(dir.path().join("a.facts"), "# section\n\n- fact a\n\n\n").unwrap();
+    fs::write(dir.path().join("b.facts"), "# section\n\n- fact b\n\n\n").unwrap();
+
+    // Make directory read-only so temp-file creation fails.
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+
+    let _result = facts_cmd(&dir).arg("fmt").assert().failure();
+
+    // Restore permissions so we can inspect the directory.
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+
+    // Both original files must be untouched.
+    let a = fs::read_to_string(dir.path().join("a.facts")).unwrap();
+    let b = fs::read_to_string(dir.path().join("b.facts")).unwrap();
+    assert!(a.ends_with("\n\n\n"), "a.facts must remain untouched");
+    assert!(b.ends_with("\n\n\n"), "b.facts must remain untouched");
+
+    // No temp file should remain.
+    let mut has_tmp = false;
+    for entry in fs::read_dir(dir.path()).unwrap() {
+        let name = entry.unwrap().file_name();
+        if name.to_string_lossy().starts_with(".facts.fmt.") {
+            has_tmp = true;
+        }
+    }
+    assert!(!has_tmp, "no temp file should remain after failed fmt");
+}
+
+#[test]
 fn lint_warns_unclosed_bracket_tags() {
     let dir = project("- label: test fact\n  tags: [mvp, core\n");
     facts_cmd(&dir)
