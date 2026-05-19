@@ -324,7 +324,10 @@ fn main() -> anyhow::Result<()> {
                 depth,
                 light,
             };
-            list::run(&opts)?;
+            let had_output = list::run(&opts)?;
+            if !had_output {
+                std::process::exit(1);
+            }
         }
         Some(Command::Check {
             tags,
@@ -453,7 +456,10 @@ fn main() -> anyhow::Result<()> {
                 depth: None,
                 light: false,
             };
-            list::run(&opts)?;
+            let had_output = list::run(&opts)?;
+            if !had_output {
+                std::process::exit(1);
+            }
         }
     }
 

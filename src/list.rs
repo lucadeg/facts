@@ -20,8 +20,8 @@ pub struct ListOptions {
     pub light: bool,
 }
 
-/// Run the list subcommand.
-pub fn run(opts: &ListOptions) -> Result<()> {
+/// Run the list subcommand. Returns `true` if any facts were listed.
+pub fn run(opts: &ListOptions) -> Result<bool> {
     if let Some(ref expr) = opts.tags_expr {
         validate_tag_expr(expr).map_err(|e| anyhow::anyhow!("invalid tag expression: {e}"))?;
     }
@@ -34,7 +34,7 @@ pub fn run(opts: &ListOptions) -> Result<()> {
 
     if files.is_empty() {
         eprintln!("no .facts files found in {}", root.display());
-        return Ok(());
+        return Ok(false);
     }
 
     let mut sheets = Vec::new();
@@ -136,7 +136,20 @@ pub fn run(opts: &ListOptions) -> Result<()> {
         }
     }
 
-    Ok(())
+    let has_active_filters = opts.file_filter.is_some()
+        || opts.section_filter.is_some()
+        || opts.has_command
+        || opts.manual
+        || opts.tags_expr.is_some()
+        || opts.search_expr.is_some()
+        || opts.depth.is_some();
+
+    if !any_output && has_active_filters {
+        eprintln!("no facts match the given filters");
+        return Ok(false);
+    }
+
+    Ok(true)
 }
 
 /// Print markdown heading lines for any new path segments.

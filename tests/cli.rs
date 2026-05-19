@@ -1203,6 +1203,94 @@ fn list_file_nonexistent_errors() {
 }
 
 #[test]
+fn list_filter_section_no_match_exits_nonzero() {
+    let dir = project("- a fact\n");
+    facts_cmd(&dir)
+        .args(["list", "--section", "nonexistent"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no facts match the given filters"))
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn list_filter_tags_no_match_exits_nonzero() {
+    let dir = project("- a fact\n");
+    facts_cmd(&dir)
+        .args(["list", "--tags", "nonexistent"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no facts match the given filters"))
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn list_filter_search_no_match_exits_nonzero() {
+    let dir = project("- a fact\n");
+    facts_cmd(&dir)
+        .args(["list", "--search", "nonexistent"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no facts match the given filters"))
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn list_filter_has_command_no_match_exits_nonzero() {
+    let dir = project("- a manual fact\n");
+    facts_cmd(&dir)
+        .args(["list", "--has-command"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no facts match the given filters"))
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn list_filter_manual_no_match_exits_nonzero() {
+    let dir = project("- label: cmd fact\n  command: echo hi\n");
+    facts_cmd(&dir)
+        .args(["list", "--manual"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no facts match the given filters"))
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn list_filter_depth_no_match_exits_nonzero() {
+    let dir = project("# section\n\n- nested fact\n");
+    facts_cmd(&dir)
+        .args(["list", "--depth", "0"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no facts match the given filters"))
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn list_filter_composed_no_match_exits_nonzero() {
+    let dir = project("- a fact\n");
+    facts_cmd(&dir)
+        .args(["list", "--section", "api", "--tags", "mvp"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no facts match the given filters"))
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn list_no_facts_files_exits_nonzero() {
+    let dir = empty_project();
+    facts_cmd(&dir)
+        .arg("list")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no .facts files found"))
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
 fn headings_only_no_facts() {
     let dir = project("# section one\n\n## subsection\n\n# section two\n");
     facts_cmd(&dir)
