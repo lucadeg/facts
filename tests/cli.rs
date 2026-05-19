@@ -3538,6 +3538,41 @@ fn get_full_output() {
     assert!(stdout.contains("tags: [mvp]"));
 }
 
+#[test]
+fn get_quoted_explicit_id() {
+    let dir = project("- label: quoted id fact\n  id: \"my explicit id\"\n");
+
+    facts_cmd(&dir)
+        .args(["get", "my explicit id"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("label: quoted id fact"))
+        .stdout(predicate::str::contains("id: my explicit id"));
+}
+
+#[test]
+fn get_single_quoted_explicit_id() {
+    let dir = project("- label: single quoted fact\n  id: 'my-id'\n");
+
+    facts_cmd(&dir)
+        .args(["get", "my-id"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("label: single quoted fact"))
+        .stdout(predicate::str::contains("id: my-id"));
+}
+
+#[test]
+fn get_empty_id_errors() {
+    let dir = project("- some fact\n");
+
+    facts_cmd(&dir)
+        .args(["get", ""])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ID cannot be empty"));
+}
+
 // ===========================================================================
 // move
 // ===========================================================================

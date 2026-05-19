@@ -17,6 +17,10 @@ pub fn run(target_id: &str) -> Result<()> {
 
 /// Run the get subcommand in a given root directory.
 pub fn run_in(target_id: &str, root: &Path) -> Result<()> {
+    if target_id.is_empty() {
+        anyhow::bail!("ID cannot be empty");
+    }
+
     let files = project::discover_fact_files(root)?;
 
     if files.is_empty() {
@@ -208,5 +212,33 @@ mod tests {
         let dir = setup_test_dir(content);
         let target_id = find_id_for_label(content, "fact in section");
         run_in(&target_id, dir.path()).unwrap();
+    }
+
+    #[test]
+    fn test_get_empty_id_errors() {
+        let content = "- some fact\n";
+        let dir = setup_test_dir(content);
+        let result = run_in("", dir.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("ID cannot be empty"),
+            "error should reject empty ID: {err}"
+        );
+    }
+
+    #[test]
+    fn test_get_quoted_explicit_id() {
+        let content = "- id: \"my explicit id\"\n  label: test fact\n";
+        let dir = setup_test_dir(content);
+        // get by the unquoted explicit ID
+        run_in("my explicit id", dir.path()).unwrap();
+    }
+
+    #[test]
+    fn test_get_single_quoted_explicit_id() {
+        let content = "- id: 'my-id'\n  label: test fact\n";
+        let dir = setup_test_dir(content);
+        run_in("my-id", dir.path()).unwrap();
     }
 }

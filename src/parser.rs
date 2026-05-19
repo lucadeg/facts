@@ -247,21 +247,22 @@ fn parse_mapping_fact(lines: &[String], blank_lines_before: usize) -> Result<Fac
 
     for kv_line in &kv_lines {
         if let Some(val) = kv_line.strip_prefix("label: ") {
+            let val = strip_yaml_quotes(val);
             let (clean_label, inline_tags) = extract_inline_tags(val);
             label = Some(clean_label);
             mapping_tags.extend(inline_tags);
         } else if kv_line.starts_with("label:") && kv_line.trim() == "label:" {
             bail!("fact has empty label");
         } else if let Some(val) = kv_line.strip_prefix("command: ") {
-            command = Some(val.to_string());
+            command = Some(strip_yaml_quotes(val).to_string());
         } else if let Some(val) = kv_line.strip_prefix("id: ") {
-            explicit_id = Some(val.to_string());
+            explicit_id = Some(strip_yaml_quotes(val).to_string());
         } else if let Some(val) = kv_line.strip_prefix("tags: ") {
-            let val = val.trim();
+            let val = strip_yaml_quotes(val.trim());
             if val.starts_with('[') && val.ends_with(']') {
                 let inner = &val[1..val.len() - 1];
                 for tag in inner.split(',') {
-                    let tag = tag.trim();
+                    let tag = strip_yaml_quotes(tag.trim());
                     if !tag.is_empty() {
                         mapping_tags.push(tag.to_string());
                     }
@@ -294,6 +295,19 @@ fn parse_mapping_fact(lines: &[String], blank_lines_before: usize) -> Result<Fac
         raw,
         blank_lines_before,
     })
+}
+
+/// Strip matching YAML-style surrounding quotes from a scalar value.
+/// Removes `"value"` → `value` and `'value'` → `value`.
+/// Unmatched quotes are left intact.
+pub fn strip_yaml_quotes(s: &str) -> &str {
+    if s.len() >= 2
+        && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')))
+    {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
 }
 
 /// Extract inline @tags from a string, returning (cleaned_label, tags).
@@ -584,5 +598,73 @@ mod tests {
             root.contains("continuation line must be indented with 2 spaces or a tab"),
             "expected helpful error for single-space continuation, got: {root}"
         );
+    }
+
+    #[test]
+    fn test_strip_yaml_quotes_double() {
+        assert_eq!(strip_yaml_quotes("\"hello\""), "hello");
+    }
+
+    #[test]
+    fn test_strip_yaml_quotes_single() {
+        assert_eq!(strip_yaml_quotes("'hello'"), "hello");
+    }
+
+    #[test]
+    fn test_strip_yaml_quotes_unmatched_left() {
+        assert_eq!(strip_yaml_quotes("\"hello"), "\"hello");
+    }
+
+    #[test]
+    fn test_strip_yaml_quotes_unmatched_right() {
+        assert_eq!(strip_yaml_quotes("hello\""), "hello\"");
+    }
+
+    #[test]
+    fn test_strip_yaml_quotes_empty() {
+        assert_eq!(strip_yaml_quotes("\"\""), "");
+    }
+
+    #[test]
+    fn test_strip_yaml_quotes_no_quotes() {
+        assert_eq!(strip_yaml_quotes("plain"), "plain");
+    }
+
+    #[test]
+    fn test_parse_quoted_explicit_id() {
+        let content = "- id: \"my explicit id\"\n  label: test fact\n";
+        let sheet = parse(content, ".facts").unwrap();
+        assert_eq!(sheet.preamble.len(), 1);
+        assert_eq!(sheet.preamble[0].explicit_id, Some("my explicit id".to_string()));
+        assert_eq!(sheet.preamble[0].label, "test fact");
+    }
+
+    #[test]
+    fn test_parse_quoted_label() {
+        let content = "- label: \"quoted label\"\n  command: echo hi\n";
+        let sheet = parse(content, ".facts").unwrap();
+        assert_eq!(sheet.preamble.len(), 1);
+        assert_eq!(sheet.preamble[0].label, "quoted label");
+    }
+
+    #[test]
+    fn test_parse_quoted_command() {
+        let content = "- label: test\n  command: \"echo hello world\"\n";
+        let sheet = parse(content, ".facts").unwrap();
+        assert_eq!(sheet.preamble[0].command, Some("echo hello world".to_string()));
+    }
+
+    #[test]
+    fn test_parse_quoted_tags() {
+        let content = "- label: test\n  tags: '[\"a\", \"b\"]'\n";
+        let sheet = parse(content, ".facts").unwrap();
+        assert_eq!(sheet.preamble[0].tags, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_parse_single_quoted_explicit_id() {
+        let content = "- id: 'my id'\n  label: test fact\n";
+        let sheet = parse(content, ".facts").unwrap();
+        assert_eq!(sheet.preamble[0].explicit_id, Some("my id".to_string()));
     }
 }
