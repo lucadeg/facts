@@ -46,7 +46,7 @@ pub fn run(opts: &LintOptions) -> Result<bool> {
 
     if files.is_empty() {
         eprintln!("no .facts files found in {}", root.display());
-        return Ok(true);
+        return Ok(false);
     }
 
     let mut all_diagnostics: Vec<LintDiagnostic> = Vec::new();

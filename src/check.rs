@@ -225,7 +225,7 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
 
     if files.is_empty() {
         eprintln!("no .facts files found in {}", root.display());
-        return Ok(true);
+        return Ok(false);
     }
 
     // Lint all files first — fail early on structural errors.

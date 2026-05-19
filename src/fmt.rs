@@ -12,8 +12,7 @@ pub fn run() -> Result<()> {
     let files = project::discover_fact_files(&root)?;
 
     if files.is_empty() {
-        eprintln!("no .facts files found in {}", root.display());
-        return Ok(());
+        anyhow::bail!("no .facts files found in {}", root.display());
     }
 
     // Validate all files first — abort on any lint errors.

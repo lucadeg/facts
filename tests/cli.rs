@@ -225,6 +225,16 @@ fn check_exit_zero_with_only_manual_facts() {
     facts_cmd(&dir).arg("check").assert().success();
 }
 
+#[test]
+fn check_no_facts_files_exits_nonzero() {
+    let dir = empty_project();
+    facts_cmd(&dir)
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no .facts files found"));
+}
+
 // ===========================================================================
 // add
 // ===========================================================================
@@ -435,6 +445,16 @@ fn edit_unknown_id_errors() {
 // ===========================================================================
 // lint
 // ===========================================================================
+
+#[test]
+fn lint_no_facts_files_exits_nonzero() {
+    let dir = empty_project();
+    facts_cmd(&dir)
+        .arg("lint")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no .facts files found"));
+}
 
 #[test]
 fn lint_valid_file_passes() {
@@ -3635,6 +3655,16 @@ fn move_cross_file_with_section() {
 // ===========================================================================
 // fmt
 // ===========================================================================
+
+#[test]
+fn fmt_no_facts_files_exits_nonzero() {
+    let dir = empty_project();
+    facts_cmd(&dir)
+        .arg("fmt")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no .facts files found"));
+}
 
 #[test]
 fn fmt_normalizes_file() {
