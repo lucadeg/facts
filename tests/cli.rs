@@ -3905,6 +3905,45 @@ fn fmt_is_idempotent() {
     assert_eq!(after, content);
 }
 
+#[test]
+fn fmt_passes_on_malformed_bracket_tags_warning() {
+    let dir = project("- label: test fact\n  tags: [mvp, core\n");
+    facts_cmd(&dir)
+        .arg("fmt")
+        .assert()
+        .success();
+}
+
+#[test]
+fn fmt_preserves_raw_fact_on_malformed_bracket_tags() {
+    let content = "- label: test fact\n  tags: [mvp, core\n";
+    let dir = project(content);
+    facts_cmd(&dir).arg("fmt").assert().success();
+
+    let after = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert_eq!(after, content);
+}
+
+#[test]
+fn lint_warns_unclosed_bracket_tags() {
+    let dir = project("- label: test fact\n  tags: [mvp, core\n");
+    facts_cmd(&dir)
+        .arg("lint")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("tags list has unclosed bracket"));
+}
+
+#[test]
+fn lint_warns_unmatched_closing_bracket_tags() {
+    let dir = project("- label: test fact\n  tags: mvp, core]\n");
+    facts_cmd(&dir)
+        .arg("lint")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("tags list has unmatched closing bracket"));
+}
+
 // ===========================================================================
 // list/check tags display
 // ===========================================================================

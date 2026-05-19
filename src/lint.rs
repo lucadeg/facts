@@ -242,6 +242,7 @@ fn check_mixed_tags(content: &str, filename: &str, diagnostics: &mut Vec<LintDia
 ///
 /// Bare comma-separated values like `tags: mvp, core` are silently ignored
 /// by the parser. Warn users to use bracket syntax: `tags: [mvp, core]`.
+/// Also catches malformed brackets (unclosed or unmatched closing).
 fn check_bare_tags(content: &str, filename: &str, diagnostics: &mut Vec<LintDiagnostic>) {
     let lines: Vec<&str> = content.lines().collect();
     let fact_groups = group_fact_lines(&lines);
@@ -253,11 +254,34 @@ fn check_bare_tags(content: &str, filename: &str, diagnostics: &mut Vec<LintDiag
 
             if let Some(val) = stripped.strip_prefix("tags: ") {
                 let val = val.trim();
-                if !(val.is_empty() || val.starts_with('[') && val.ends_with(']')) {
+                if val.is_empty() {
+                    continue;
+                }
+                if val.starts_with('[') && !val.ends_with(']') {
                     diagnostics.push(LintDiagnostic {
                         file: filename.to_string(),
                         line: Some(group.start_line + offset),
-                        message: format!("tags should use bracket syntax: tags: [{}]", val),
+                        message: format!(
+                            "tags list has unclosed bracket: tags: {val}"
+                        ),
+                        severity: Severity::Warning,
+                    });
+                } else if !val.starts_with('[') && val.ends_with(']') {
+                    diagnostics.push(LintDiagnostic {
+                        file: filename.to_string(),
+                        line: Some(group.start_line + offset),
+                        message: format!(
+                            "tags list has unmatched closing bracket: tags: {val}"
+                        ),
+                        severity: Severity::Warning,
+                    });
+                } else if !(val.starts_with('[') && val.ends_with(']')) {
+                    diagnostics.push(LintDiagnostic {
+                        file: filename.to_string(),
+                        line: Some(group.start_line + offset),
+                        message: format!(
+                            "tags should use bracket syntax: tags: [{val}]"
+                        ),
                         severity: Severity::Warning,
                     });
                 }
@@ -864,6 +888,54 @@ mod tests {
         assert!(
             diags.is_empty(),
             "expected no diagnostics for bracket tags, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_lint_warns_unclosed_bracket_tags() {
+        let content = "- label: my fact\n  tags: [mvp, core\n";
+        let diags = lint_content(content, ".facts");
+        let warnings: Vec<_> = diags
+            .iter()
+            .filter(|d| d.severity == Severity::Warning)
+            .collect();
+        assert_eq!(warnings.len(), 1, "expected 1 warning for unclosed bracket");
+        assert!(
+            warnings[0].message.contains("tags list has unclosed bracket"),
+            "unexpected message: {}",
+            warnings[0].message
+        );
+    }
+
+    #[test]
+    fn test_lint_warns_unmatched_closing_bracket_tags() {
+        let content = "- label: my fact\n  tags: mvp, core]\n";
+        let diags = lint_content(content, ".facts");
+        let warnings: Vec<_> = diags
+            .iter()
+            .filter(|d| d.severity == Severity::Warning)
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "expected 1 warning for unmatched closing bracket"
+        );
+        assert!(
+            warnings[0]
+                .message
+                .contains("tags list has unmatched closing bracket"),
+            "unexpected message: {}",
+            warnings[0].message
+        );
+    }
+
+    #[test]
+    fn test_lint_empty_bracket_tags_pass() {
+        let content = "- label: my fact\n  tags: []\n";
+        let diags = lint_content(content, ".facts");
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics for empty bracket tags, got: {diags:?}"
         );
     }
 
