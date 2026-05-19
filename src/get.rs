@@ -189,6 +189,20 @@ mod tests {
     }
 
     #[test]
+    fn test_get_no_facts_files_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+
+        let result = run_in("zzz", dir.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("no .facts files found"),
+            "error should mention missing files: {err}"
+        );
+    }
+
+    #[test]
     fn test_get_fact_in_section() {
         let content = "# mysection\n\n- fact in section\n";
         let dir = setup_test_dir(content);

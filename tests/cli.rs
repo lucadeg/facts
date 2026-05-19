@@ -1173,6 +1173,16 @@ fn empty_facts_file_lint() {
 }
 
 #[test]
+fn list_file_nonexistent_errors() {
+    let dir = project("- a fact\n");
+    facts_cmd(&dir)
+        .args(["list", "--file", "nonexistent"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("file not found"));
+}
+
+#[test]
 fn headings_only_no_facts() {
     let dir = project("# section one\n\n## subsection\n\n# section two\n");
     facts_cmd(&dir)

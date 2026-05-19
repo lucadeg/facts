@@ -42,11 +42,13 @@ pub fn discover_with_explicit(root: &Path, explicit_file: Option<&str>) -> Resul
     let mut files = discover_fact_files(root)?;
     if let Some(file_arg) = explicit_file {
         let (_, path) = resolve_file_arg(root, file_arg);
+        if !path.exists() {
+            anyhow::bail!("file not found: {}", path.display());
+        }
         let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-        if path.exists()
-            && !files
-                .iter()
-                .any(|f| f.canonicalize().unwrap_or_else(|_| f.clone()) == canonical)
+        if !files
+            .iter()
+            .any(|f| f.canonicalize().unwrap_or_else(|_| f.clone()) == canonical)
         {
             files.push(path);
         }
@@ -95,6 +97,7 @@ pub fn discover_fact_files(root: &Path) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_find_project_root() {
@@ -103,5 +106,20 @@ mod tests {
         assert!(root.is_ok());
         let root = root.unwrap();
         assert!(root.join(".git").exists());
+    }
+
+    #[test]
+    fn test_discover_with_explicit_missing_file_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".facts"), "- a fact\n").unwrap();
+
+        let result = discover_with_explicit(dir.path(), Some("nonexistent"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("file not found"), "unexpected error: {err}");
+        assert!(
+            err.contains("nonexistent.facts"),
+            "error should mention resolved filename: {err}"
+        );
     }
 }
