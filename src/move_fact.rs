@@ -137,6 +137,24 @@ pub fn run_in(opts: &MoveOptions, root: &Path) -> Result<()> {
         sheets.push((target_path, new_sheet));
     }
 
+    // For cross-file moves, write the target FIRST so that if it fails the source
+    // is still intact — the fact is not lost. If the target succeeds but the source
+    // write then fails, the fact exists in both files (a duplicate, but no data loss).
+    if is_cross_file {
+        let target_idx = sheets
+            .iter()
+            .position(|(_, sheet)| sheet.filename == target_filename)
+            .unwrap();
+        let (ref target_path, ref target_sheet) = sheets[target_idx];
+        let target_output = writer::write(target_sheet);
+        if let Some(parent) = target_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create directory {}", parent.display()))?;
+        }
+        std::fs::write(target_path, &target_output)
+            .with_context(|| format!("failed to write {}", target_path.display()))?;
+    }
+
     // Write the source file.
     let (ref source_path, ref source_sheet) = sheets[source_sheet_idx];
     let source_output = writer::write(source_sheet);
@@ -152,22 +170,6 @@ pub fn run_in(opts: &MoveOptions, root: &Path) -> Result<()> {
     } else {
         std::fs::write(source_path, &source_output)
             .with_context(|| format!("failed to write {}", source_path.display()))?;
-    }
-
-    // Write the target file if it's different from the source.
-    if is_cross_file {
-        let target_idx = sheets
-            .iter()
-            .position(|(_, sheet)| sheet.filename == target_filename)
-            .unwrap();
-        let (ref target_path, ref target_sheet) = sheets[target_idx];
-        let target_output = writer::write(target_sheet);
-        if let Some(parent) = target_path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create directory {}", parent.display()))?;
-        }
-        std::fs::write(target_path, &target_output)
-            .with_context(|| format!("failed to write {}", target_path.display()))?;
     }
 
     println!("{}", assigned_ids[match_idx]);
@@ -459,5 +461,126 @@ mod tests {
         assert!(target.contains("# api"));
         assert!(target.contains("## endpoints"));
         assert!(target.contains("fact to move"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_move_cross_file_readonly_target_fails_and_preserves_source() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let content = "- fact to stay\n- fact to move\n";
+        let (dir, facts_path) = setup_test_dir(content);
+
+        // Create an existing target file and make it read-only
+        let target_path = dir.path().join("target.facts");
+        fs::write(&target_path, "- existing target fact\n").unwrap();
+        let ro = fs::Permissions::from_mode(0o444);
+        fs::set_permissions(&target_path, ro).unwrap();
+
+        let target_id = find_id_for_label(content, "fact to move");
+        let opts = MoveOptions {
+            target_id,
+            target_section: None,
+            target_file: Some("target.facts".to_string()),
+        };
+        let result = run_in(&opts, dir.path());
+        assert!(result.is_err(), "move to read-only target should fail");
+
+        // Source must still contain the fact (no data loss)
+        let source = fs::read_to_string(&facts_path).unwrap();
+        assert!(
+            source.contains("fact to move"),
+            "source must still contain the moved fact after failed target write"
+        );
+        assert!(source.contains("fact to stay"));
+
+        // Target must still contain its original fact
+        let target = fs::read_to_string(&target_path).unwrap();
+        assert!(target.contains("existing target fact"));
+
+        // Restore permissions for cleanup
+        let rw = fs::Permissions::from_mode(0o644);
+        fs::set_permissions(&target_path, rw).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_move_cross_file_readonly_target_dir_fails_and_preserves_source() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let content = "- fact to stay\n- fact to move\n";
+        let (dir, facts_path) = setup_test_dir(content);
+
+        // Create a read-only subdirectory
+        let subdir = dir.path().join("readonly_subdir");
+        fs::create_dir(&subdir).unwrap();
+        let ro = fs::Permissions::from_mode(0o555);
+        fs::set_permissions(&subdir, ro).unwrap();
+
+        let target_id = find_id_for_label(content, "fact to move");
+        let opts = MoveOptions {
+            target_id,
+            target_section: None,
+            target_file: Some("readonly_subdir/new.facts".to_string()),
+        };
+        let result = run_in(&opts, dir.path());
+        assert!(result.is_err(), "move to read-only dir should fail");
+
+        // Source must still contain the fact (no data loss)
+        let source = fs::read_to_string(&facts_path).unwrap();
+        assert!(
+            source.contains("fact to move"),
+            "source must still contain the moved fact after failed target write"
+        );
+        assert!(source.contains("fact to stay"));
+
+        // Restore permissions for cleanup
+        let rw = fs::Permissions::from_mode(0o755);
+        fs::set_permissions(&subdir, rw).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_move_cross_file_readonly_nonempty_source_fails_no_data_loss() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let content = "- fact to stay\n- fact to move\n";
+        let (dir, facts_path) = setup_test_dir(content);
+
+        // Create target file (writable)
+        let target_path = dir.path().join("target.facts");
+        fs::write(&target_path, "- existing target fact\n").unwrap();
+
+        // Make source read-only
+        let ro = fs::Permissions::from_mode(0o444);
+        fs::set_permissions(&facts_path, ro).unwrap();
+
+        let target_id = find_id_for_label(content, "fact to move");
+        let opts = MoveOptions {
+            target_id,
+            target_section: None,
+            target_file: Some("target.facts".to_string()),
+        };
+        let result = run_in(&opts, dir.path());
+        assert!(result.is_err(), "move with read-only source should fail");
+
+        // Because target is written first, it now contains the moved fact.
+        // The source write then fails, so the source still has it too.
+        // This creates a duplicate but prevents data loss.
+        let target = fs::read_to_string(&target_path).unwrap();
+        assert!(
+            target.contains("fact to move"),
+            "target must contain the fact (target was written before source failed)"
+        );
+        assert!(target.contains("existing target fact"));
+
+        // Source must still contain both facts
+        let source = fs::read_to_string(&facts_path).unwrap();
+        assert!(source.contains("fact to move"));
+        assert!(source.contains("fact to stay"));
+
+        // Restore permissions for cleanup
+        let rw = fs::Permissions::from_mode(0o644);
+        fs::set_permissions(&facts_path, rw).unwrap();
     }
 }

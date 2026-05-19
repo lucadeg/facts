@@ -3740,6 +3740,92 @@ fn move_cross_file_with_section() {
     assert!(target.contains("fact to relocate"));
 }
 
+#[test]
+#[cfg(unix)]
+fn move_cross_file_readonly_target_fails_and_preserves_source() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = project("- fact to stay\n- fact to move\n");
+
+    // Create an existing target file and make it read-only
+    let target_path = dir.path().join("target.facts");
+    fs::write(&target_path, "- existing target fact\n").unwrap();
+    let ro = fs::Permissions::from_mode(0o444);
+    fs::set_permissions(&target_path, ro).unwrap();
+
+    let list_output = facts_cmd(&dir).arg("list").output().unwrap();
+    let stdout = String::from_utf8_lossy(&list_output.stdout);
+    let id = stdout
+        .lines()
+        .find(|l| l.contains("fact to move"))
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap();
+
+    facts_cmd(&dir)
+        .args(["move", id, "--file", "target.facts"])
+        .assert()
+        .failure();
+
+    // Source must still contain the fact (no data loss)
+    let source = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert!(
+        source.contains("fact to move"),
+        "source must still contain the moved fact after failed target write"
+    );
+    assert!(source.contains("fact to stay"));
+
+    // Target must still contain its original fact
+    let target = fs::read_to_string(&target_path).unwrap();
+    assert!(target.contains("existing target fact"));
+
+    // Restore permissions for cleanup
+    let rw = fs::Permissions::from_mode(0o644);
+    fs::set_permissions(&target_path, rw).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn move_cross_file_readonly_target_dir_fails_and_preserves_source() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = project("- fact to stay\n- fact to move\n");
+
+    // Create a read-only subdirectory
+    let subdir = dir.path().join("readonly_subdir");
+    fs::create_dir(&subdir).unwrap();
+    let ro = fs::Permissions::from_mode(0o555);
+    fs::set_permissions(&subdir, ro).unwrap();
+
+    let list_output = facts_cmd(&dir).arg("list").output().unwrap();
+    let stdout = String::from_utf8_lossy(&list_output.stdout);
+    let id = stdout
+        .lines()
+        .find(|l| l.contains("fact to move"))
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap();
+
+    facts_cmd(&dir)
+        .args(["move", id, "--file", "readonly_subdir/new.facts"])
+        .assert()
+        .failure();
+
+    // Source must still contain the fact (no data loss)
+    let source = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert!(
+        source.contains("fact to move"),
+        "source must still contain the moved fact after failed target write"
+    );
+    assert!(source.contains("fact to stay"));
+
+    // Restore permissions for cleanup
+    let rw = fs::Permissions::from_mode(0o755);
+    fs::set_permissions(&subdir, rw).unwrap();
+}
+
 // ===========================================================================
 // fmt
 // ===========================================================================
