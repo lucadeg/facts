@@ -97,7 +97,11 @@ fn format_tag_suffix(tags: &[String]) -> String {
 }
 
 /// Execute a command via $SHELL (fallback to sh) and return (exit_code, stderr).
-pub(crate) fn run_command(command: &str, project_root: &Path, timeout: Option<Duration>) -> (i32, String) {
+pub(crate) fn run_command(
+    command: &str,
+    project_root: &Path,
+    timeout: Option<Duration>,
+) -> (i32, String) {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
 
     let mut cmd = Command::new(&shell);

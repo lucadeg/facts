@@ -261,27 +261,21 @@ fn check_bare_tags(content: &str, filename: &str, diagnostics: &mut Vec<LintDiag
                     diagnostics.push(LintDiagnostic {
                         file: filename.to_string(),
                         line: Some(group.start_line + offset),
-                        message: format!(
-                            "tags list has unclosed bracket: tags: {val}"
-                        ),
+                        message: format!("tags list has unclosed bracket: tags: {val}"),
                         severity: Severity::Warning,
                     });
                 } else if !val.starts_with('[') && val.ends_with(']') {
                     diagnostics.push(LintDiagnostic {
                         file: filename.to_string(),
                         line: Some(group.start_line + offset),
-                        message: format!(
-                            "tags list has unmatched closing bracket: tags: {val}"
-                        ),
+                        message: format!("tags list has unmatched closing bracket: tags: {val}"),
                         severity: Severity::Warning,
                     });
                 } else if !(val.starts_with('[') && val.ends_with(']')) {
                     diagnostics.push(LintDiagnostic {
                         file: filename.to_string(),
                         line: Some(group.start_line + offset),
-                        message: format!(
-                            "tags should use bracket syntax: tags: [{val}]"
-                        ),
+                        message: format!("tags should use bracket syntax: tags: [{val}]"),
                         severity: Severity::Warning,
                     });
                 }
@@ -901,7 +895,9 @@ mod tests {
             .collect();
         assert_eq!(warnings.len(), 1, "expected 1 warning for unclosed bracket");
         assert!(
-            warnings[0].message.contains("tags list has unclosed bracket"),
+            warnings[0]
+                .message
+                .contains("tags list has unclosed bracket"),
             "unexpected message: {}",
             warnings[0].message
         );

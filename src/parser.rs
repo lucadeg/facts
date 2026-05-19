@@ -275,7 +275,9 @@ fn parse_mapping_fact(lines: &[String], blank_lines_before: usize) -> Result<Fac
             if !key.contains(' ') {
                 let known = ["label", "command", "id", "tags"];
                 if !known.contains(&key) {
-                    bail!("unknown key '{key}' in fact mapping");
+                    bail!(
+                        "unknown key '{key}' in fact mapping (allowed: id, label, command, tags)"
+                    );
                 }
             }
         }
@@ -635,7 +637,10 @@ mod tests {
         let content = "- id: \"my explicit id\"\n  label: test fact\n";
         let sheet = parse(content, ".facts").unwrap();
         assert_eq!(sheet.preamble.len(), 1);
-        assert_eq!(sheet.preamble[0].explicit_id, Some("my explicit id".to_string()));
+        assert_eq!(
+            sheet.preamble[0].explicit_id,
+            Some("my explicit id".to_string())
+        );
         assert_eq!(sheet.preamble[0].label, "test fact");
     }
 
@@ -651,7 +656,10 @@ mod tests {
     fn test_parse_quoted_command() {
         let content = "- label: test\n  command: \"echo hello world\"\n";
         let sheet = parse(content, ".facts").unwrap();
-        assert_eq!(sheet.preamble[0].command, Some("echo hello world".to_string()));
+        assert_eq!(
+            sheet.preamble[0].command,
+            Some("echo hello world".to_string())
+        );
     }
 
     #[test]
@@ -666,5 +674,20 @@ mod tests {
         let content = "- id: 'my id'\n  label: test fact\n";
         let sheet = parse(content, ".facts").unwrap();
         assert_eq!(sheet.preamble[0].explicit_id, Some("my id".to_string()));
+    }
+
+    #[test]
+    fn test_parse_unknown_key_error_includes_allowed_keys() {
+        let content = "- label: test\n  badkey: value\n";
+        let err = parse(content, ".facts").unwrap_err();
+        let root = err.root_cause().to_string();
+        assert!(
+            root.contains("unknown key 'badkey'"),
+            "error should mention the unknown key: {root}"
+        );
+        assert!(
+            root.contains("allowed: id, label, command, tags"),
+            "error should list allowed keys: {root}"
+        );
     }
 }

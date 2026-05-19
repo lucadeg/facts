@@ -17,7 +17,7 @@ fn find_project_root_from(start: &Path) -> Result<PathBuf> {
         }
         if !dir.pop() {
             anyhow::bail!(
-                "no .git directory found in any parent of {}",
+                "no .git directory found in any parent of {} — run `git init` or navigate to a git repository",
                 start.display()
             );
         }
@@ -120,6 +120,22 @@ mod tests {
         assert!(
             err.contains("nonexistent.facts"),
             "error should mention resolved filename: {err}"
+        );
+    }
+
+    #[test]
+    fn test_find_project_root_from_no_git_errors() {
+        // Use /dev/shm as a path known to have no .git in any parent.
+        let result = find_project_root_from(Path::new("/dev/shm"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("git init"),
+            "error should suggest git init: {err}"
+        );
+        assert!(
+            err.contains("navigate to a git repository"),
+            "error should suggest navigating to a git repo: {err}"
         );
     }
 }

@@ -515,7 +515,10 @@ mod tests {
             remove_tags: None,
         };
         let result = run_in(&opts, dir.path());
-        assert!(result.is_ok(), "should allow explicit ID matching a computed ID");
+        assert!(
+            result.is_ok(),
+            "should allow explicit ID matching a computed ID"
+        );
 
         // Verify both facts are still addressable with unique IDs.
         let new_content = fs::read_to_string(&facts_path).unwrap();
@@ -527,11 +530,26 @@ mod tests {
             .collect();
         let new_ids = id::assign_ids(&new_labels);
 
-        let first_idx = new_labels.iter().position(|(l, _)| l == "first fact").unwrap();
-        let second_idx = new_labels.iter().position(|(l, _)| l == "second fact").unwrap();
-        assert_ne!(new_ids[first_idx], new_ids[second_idx], "IDs must be unique");
-        assert_eq!(new_ids[second_idx], first_id, "explicit ID must be preserved");
-        assert!(new_ids[first_idx].len() > first_id.len(), "computed ID should be extended");
+        let first_idx = new_labels
+            .iter()
+            .position(|(l, _)| l == "first fact")
+            .unwrap();
+        let second_idx = new_labels
+            .iter()
+            .position(|(l, _)| l == "second fact")
+            .unwrap();
+        assert_ne!(
+            new_ids[first_idx], new_ids[second_idx],
+            "IDs must be unique"
+        );
+        assert_eq!(
+            new_ids[second_idx], first_id,
+            "explicit ID must be preserved"
+        );
+        assert!(
+            new_ids[first_idx].len() > first_id.len(),
+            "computed ID should be extended"
+        );
     }
 
     #[test]

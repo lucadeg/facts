@@ -163,7 +163,10 @@ pub fn run_in(opts: &MoveOptions, root: &Path) -> Result<()> {
         let metadata = std::fs::metadata(source_path)
             .with_context(|| format!("failed to read metadata for {}", source_path.display()))?;
         if metadata.permissions().readonly() {
-            anyhow::bail!("failed to remove {}: permission denied", source_path.display());
+            anyhow::bail!(
+                "failed to remove {}: permission denied",
+                source_path.display()
+            );
         }
         std::fs::remove_file(source_path)
             .with_context(|| format!("failed to remove {}", source_path.display()))?;

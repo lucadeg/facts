@@ -543,7 +543,10 @@ mod tests {
             tags: vec![],
         };
         let result = run_in(&opts, dir.path());
-        assert!(result.is_ok(), "should allow explicit ID matching a computed ID");
+        assert!(
+            result.is_ok(),
+            "should allow explicit ID matching a computed ID"
+        );
 
         // The existing fact's computed ID should have been extended to avoid collision.
         let new_content = fs::read_to_string(&facts_path).unwrap();
@@ -556,11 +559,26 @@ mod tests {
         let new_ids = id::assign_ids(&new_labels);
 
         // Both facts should be addressable with different IDs.
-        let existing_idx = new_labels.iter().position(|(l, _)| l == "existing fact").unwrap();
-        let new_idx = new_labels.iter().position(|(l, _)| l == "new fact").unwrap();
-        assert_ne!(new_ids[existing_idx], new_ids[new_idx], "IDs must be unique");
-        assert_eq!(new_ids[new_idx], existing_id, "explicit ID must be preserved");
-        assert!(new_ids[existing_idx].len() > existing_id.len(), "computed ID should be extended");
+        let existing_idx = new_labels
+            .iter()
+            .position(|(l, _)| l == "existing fact")
+            .unwrap();
+        let new_idx = new_labels
+            .iter()
+            .position(|(l, _)| l == "new fact")
+            .unwrap();
+        assert_ne!(
+            new_ids[existing_idx], new_ids[new_idx],
+            "IDs must be unique"
+        );
+        assert_eq!(
+            new_ids[new_idx], existing_id,
+            "explicit ID must be preserved"
+        );
+        assert!(
+            new_ids[existing_idx].len() > existing_id.len(),
+            "computed ID should be extended"
+        );
     }
 
     #[test]
@@ -688,6 +706,9 @@ mod tests {
 
         // Verify the fact is addressable by its assigned ID.
         let result = crate::get::run_in(&id, dir.path());
-        assert!(result.is_ok(), "fact with unicode label must be addressable by ID {id}");
+        assert!(
+            result.is_ok(),
+            "fact with unicode label must be addressable by ID {id}"
+        );
     }
 }

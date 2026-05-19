@@ -16,8 +16,8 @@ fn display_width_before(s: &str, byte_index: usize) -> usize {
 fn filter_prefix_width(app: &App) -> usize {
     let search_w = app.search.width();
     match app.filter_field {
-        0 => 2,                       // " /"
-        1 => 2 + search_w + 3,        // " /" + search + "  @"
+        0 => 2,                // " /"
+        1 => 2 + search_w + 3, // " /" + search + "  @"
         2 => {
             let tags_w = if app.tags_filter.is_empty() {
                 0
@@ -348,10 +348,7 @@ fn shortcut_items_for_mode(app: &App) -> Vec<(&'static str, &'static str)> {
             ("Enter", "done"),
             ("Esc", "cancel"),
         ],
-        Mode::Help => vec![
-            ("q", "close"),
-            ("Esc", "close"),
-        ],
+        Mode::Help => vec![("q", "close"), ("Esc", "close")],
         Mode::Detail => vec![
             ("x", "check"),
             ("e", "edit"),
@@ -359,11 +356,7 @@ fn shortcut_items_for_mode(app: &App) -> Vec<(&'static str, &'static str)> {
             ("q", "close"),
             ("Esc", "close"),
         ],
-        Mode::ConfirmDelete => vec![
-            ("y", "confirm"),
-            ("n", "cancel"),
-            ("Esc", "cancel"),
-        ],
+        Mode::ConfirmDelete => vec![("y", "confirm"), ("n", "cancel"), ("Esc", "cancel")],
         Mode::Form => vec![
             ("Tab", "next field"),
             ("S-Tab", "prev field"),
@@ -1135,11 +1128,7 @@ mod tests {
 
     #[test]
     fn test_no_ellipsis_when_too_narrow() {
-        let items = vec![
-            ("↑↓", "nav"),
-            ("/", "filter"),
-            ("Enter", "detail"),
-        ];
+        let items = vec![("↑↓", "nav"), ("/", "filter"), ("Enter", "detail")];
         // Keys-only is 12 chars; at width 4 we can only fit the leading space + first key (4).
         let spans = build_shortcut_spans(&items, 4);
         let text = spans.iter().map(|s| s.content.as_ref()).collect::<String>();

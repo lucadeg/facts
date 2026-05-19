@@ -1331,7 +1331,11 @@ mod tests {
         app.tree_focused = true;
         app.rebuild_tree();
 
-        let cli_idx = app.tree_nodes.iter().position(|n| n.title == "cli").unwrap();
+        let cli_idx = app
+            .tree_nodes
+            .iter()
+            .position(|n| n.title == "cli")
+            .unwrap();
         // Flat paths produce leaf nodes with no children
         assert!(!app.tree_nodes[cli_idx].has_children);
         assert!(app.tree_nodes[cli_idx].expanded);
@@ -1356,7 +1360,11 @@ mod tests {
         app.tree_focused = true;
         app.rebuild_tree();
 
-        let cli_idx = app.tree_nodes.iter().position(|n| n.title == "cli").unwrap();
+        let cli_idx = app
+            .tree_nodes
+            .iter()
+            .position(|n| n.title == "cli")
+            .unwrap();
         assert!(app.tree_nodes[cli_idx].has_children);
         assert!(app.tree_nodes[cli_idx].expanded);
 

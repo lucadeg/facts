@@ -1133,7 +1133,11 @@ fn cross_file_list_id_matches_remove_id() {
     // The ID shown by `list` should work with `remove` even across multiple files
     let dir = empty_project();
     fs::write(dir.path().join(".facts"), "- fact in default\n").unwrap();
-    fs::write(dir.path().join("other.facts"), "- fact in other\n- stay fact\n").unwrap();
+    fs::write(
+        dir.path().join("other.facts"),
+        "- fact in other\n- stay fact\n",
+    )
+    .unwrap();
 
     // Get ID from list
     let list_output = facts_cmd(&dir).arg("list").output().unwrap();
@@ -1200,6 +1204,19 @@ fn list_file_nonexistent_errors() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("file not found"));
+}
+
+#[test]
+fn list_outside_git_repo_suggests_init() {
+    // Use /dev/shm to avoid .git in parent paths (e.g. /tmp/.git on this system).
+    let dir = tempfile::Builder::new().tempdir_in("/dev/shm").unwrap();
+    // No .git directory
+    facts_cmd(&dir)
+        .arg("list")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("git init"))
+        .stderr(predicate::str::contains("navigate to a git repository"));
 }
 
 #[test]
@@ -1720,7 +1737,11 @@ fn lint_validates_all_files() {
 fn remove_fact_from_non_default_file() {
     let dir = empty_project();
     fs::write(dir.path().join(".facts"), "- default fact\n").unwrap();
-    fs::write(dir.path().join("cli.facts"), "- cli fact to remove\n- stay fact\n").unwrap();
+    fs::write(
+        dir.path().join("cli.facts"),
+        "- cli fact to remove\n- stay fact\n",
+    )
+    .unwrap();
 
     // Get ID of the cli fact
     let list_output = facts_cmd(&dir).arg("list").output().unwrap();
@@ -3967,10 +3988,7 @@ fn fmt_is_idempotent() {
 #[test]
 fn fmt_passes_on_malformed_bracket_tags_warning() {
     let dir = project("- label: test fact\n  tags: [mvp, core\n");
-    facts_cmd(&dir)
-        .arg("fmt")
-        .assert()
-        .success();
+    facts_cmd(&dir).arg("fmt").assert().success();
 }
 
 #[test]
@@ -3987,10 +4005,7 @@ fn fmt_preserves_raw_fact_on_malformed_bracket_tags() {
 fn fmt_check_passes_when_no_changes_needed() {
     let content = "# section\n\n- label: a fact\n  command: echo hi\n  tags: [mvp]\n";
     let dir = project(content);
-    facts_cmd(&dir)
-        .args(["fmt", "--check"])
-        .assert()
-        .success();
+    facts_cmd(&dir).args(["fmt", "--check"]).assert().success();
 }
 
 #[test]
@@ -4012,16 +4027,8 @@ fn fmt_check_fails_when_file_would_change() {
 fn fmt_check_reports_multiple_files() {
     let dir = TempDir::new().unwrap();
     fs::create_dir(dir.path().join(".git")).unwrap();
-    fs::write(
-        dir.path().join("a.facts"),
-        "# section\n\n- fact a\n\n\n",
-    )
-    .unwrap();
-    fs::write(
-        dir.path().join("b.facts"),
-        "# section\n\n- fact b\n\n\n",
-    )
-    .unwrap();
+    fs::write(dir.path().join("a.facts"), "# section\n\n- fact a\n\n\n").unwrap();
+    fs::write(dir.path().join("b.facts"), "# section\n\n- fact b\n\n\n").unwrap();
 
     facts_cmd(&dir)
         .args(["fmt", "--check"])
@@ -4094,7 +4101,11 @@ fn fmt_file_check_reports_would_change() {
     let dir = TempDir::new().unwrap();
     fs::create_dir(dir.path().join(".git")).unwrap();
     fs::write(dir.path().join(".facts"), "- fact one\n").unwrap();
-    fs::write(dir.path().join("api.facts"), "# section\n\n- fact two\n\n\n").unwrap();
+    fs::write(
+        dir.path().join("api.facts"),
+        "# section\n\n- fact two\n\n\n",
+    )
+    .unwrap();
 
     facts_cmd(&dir)
         .args(["fmt", "--file", "api", "--check"])
@@ -4125,8 +4136,14 @@ fn fmt_file_is_idempotent() {
     let dir = project(content);
     fs::write(dir.path().join("api.facts"), content).unwrap();
 
-    facts_cmd(&dir).args(["fmt", "--file", "api"]).assert().success();
-    facts_cmd(&dir).args(["fmt", "--file", "api"]).assert().success();
+    facts_cmd(&dir)
+        .args(["fmt", "--file", "api"])
+        .assert()
+        .success();
+    facts_cmd(&dir)
+        .args(["fmt", "--file", "api"])
+        .assert()
+        .success();
 
     let after = fs::read_to_string(dir.path().join("api.facts")).unwrap();
     assert_eq!(after, content);
@@ -4202,16 +4219,8 @@ fn fmt_reports_formatted_file() {
 fn fmt_reports_multiple_formatted_files() {
     let dir = TempDir::new().unwrap();
     fs::create_dir(dir.path().join(".git")).unwrap();
-    fs::write(
-        dir.path().join("a.facts"),
-        "# section\n\n- fact a\n\n\n",
-    )
-    .unwrap();
-    fs::write(
-        dir.path().join("b.facts"),
-        "# section\n\n- fact b\n\n\n",
-    )
-    .unwrap();
+    fs::write(dir.path().join("a.facts"), "# section\n\n- fact a\n\n\n").unwrap();
+    fs::write(dir.path().join("b.facts"), "# section\n\n- fact b\n\n\n").unwrap();
 
     facts_cmd(&dir)
         .arg("fmt")
@@ -4238,7 +4247,11 @@ fn fmt_file_reports_formatted() {
     let dir = TempDir::new().unwrap();
     fs::create_dir(dir.path().join(".git")).unwrap();
     fs::write(dir.path().join(".facts"), "- fact one\n").unwrap();
-    fs::write(dir.path().join("api.facts"), "# section\n\n- fact two\n\n\n").unwrap();
+    fs::write(
+        dir.path().join("api.facts"),
+        "# section\n\n- fact two\n\n\n",
+    )
+    .unwrap();
 
     facts_cmd(&dir)
         .args(["fmt", "--file", "api"])
@@ -4265,7 +4278,9 @@ fn lint_warns_unmatched_closing_bracket_tags() {
         .arg("lint")
         .assert()
         .success()
-        .stderr(predicate::str::contains("tags list has unmatched closing bracket"));
+        .stderr(predicate::str::contains(
+            "tags list has unmatched closing bracket",
+        ));
 }
 
 // ===========================================================================

@@ -154,10 +154,7 @@ mod tests {
         };
         let files = resolve_files(dir.path(), &opts).unwrap();
         assert_eq!(files.len(), 1);
-        assert_eq!(
-            files[0].file_name().unwrap().to_str().unwrap(),
-            "api.facts"
-        );
+        assert_eq!(files[0].file_name().unwrap().to_str().unwrap(), "api.facts");
     }
 
     #[test]
@@ -171,10 +168,7 @@ mod tests {
         };
         let files = resolve_files(dir.path(), &opts).unwrap();
         assert_eq!(files.len(), 1);
-        assert_eq!(
-            files[0].file_name().unwrap().to_str().unwrap(),
-            "api.facts"
-        );
+        assert_eq!(files[0].file_name().unwrap().to_str().unwrap(), "api.facts");
     }
 
     #[test]
@@ -212,7 +206,10 @@ mod tests {
                 has_tmp = true;
             }
         }
-        assert!(!has_tmp, "temp file should not be left after successful rename");
+        assert!(
+            !has_tmp,
+            "temp file should not be left after successful rename"
+        );
     }
 
     #[test]
@@ -230,7 +227,10 @@ mod tests {
         fs::set_permissions(&subdir, fs::Permissions::from_mode(0o555)).unwrap();
 
         let result = atomic_write(&path, "new content");
-        assert!(result.is_err(), "expected write to fail in read-only directory");
+        assert!(
+            result.is_err(),
+            "expected write to fail in read-only directory"
+        );
 
         // Restore permissions so we can inspect the directory.
         fs::set_permissions(&subdir, fs::Permissions::from_mode(0o755)).unwrap();
@@ -247,6 +247,9 @@ mod tests {
                 has_tmp = true;
             }
         }
-        assert!(!has_tmp, "temp file should be cleaned up after failed write");
+        assert!(
+            !has_tmp,
+            "temp file should be cleaned up after failed write"
+        );
     }
 }
