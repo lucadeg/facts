@@ -166,17 +166,29 @@ impl App {
     fn load_data(&mut self) -> Result<()> {
         let files = project::discover_fact_files(&self.project_root)?;
         let mut sheets = Vec::new();
+        let mut errors = Vec::new();
+
         for path in &files {
             if !path.exists() {
                 continue;
             }
-            let content = std::fs::read_to_string(path)?;
             let filename = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(".facts");
-            let sheet = parser::parse(&content, filename)?;
-            sheets.push(sheet);
+            let content = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    errors.push(format!("{filename}: {e}"));
+                    continue;
+                }
+            };
+            match parser::parse(&content, filename) {
+                Ok(sheet) => sheets.push(sheet),
+                Err(e) => {
+                    errors.push(format!("{filename}: {e}"));
+                }
+            }
         }
 
         let mut all_labels: Vec<(String, Option<String>)> = Vec::new();
@@ -206,12 +218,22 @@ impl App {
         }
 
         self.display_facts = display_facts;
+        self.filtered_indices.clear();
         self.check_results.clear();
         self.check_passed = 0;
         self.check_failed = 0;
         self.check_manual = 0;
         self.rebuild_tree();
         self.rebuild_filter();
+
+        if !errors.is_empty() {
+            if errors.len() == 1 {
+                self.status = format!("Parse error in {}", errors[0]);
+            } else {
+                self.status = format!("Parse errors in {} files", errors.len());
+            }
+        }
+
         Ok(())
     }
 
@@ -563,7 +585,9 @@ impl App {
             }
             KeyCode::Char('r') => {
                 self.load_data()?;
-                self.status = "Refreshed".to_string();
+                if !self.status.starts_with("Parse error") {
+                    self.status = "Refreshed".to_string();
+                }
             }
             KeyCode::Char('g') | KeyCode::Enter => {
                 if let Some(fact) = self.selected_fact() {
@@ -1559,6 +1583,61 @@ mod tests {
         assert_eq!(app.display_facts.len(), 2);
         let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
         assert!(content.contains("first"));
+    }
+
+    // === Parse-error resilience ===
+
+    #[test]
+    fn test_load_data_skips_file_with_parse_error() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(dir.path().join(".facts"), "- valid fact\nbad line\n").unwrap();
+        let app = App::new(dir.path().to_path_buf(), false).unwrap();
+        // Entire file is skipped because parser fails on "bad line"
+        assert!(app.display_facts.is_empty());
+        assert!(app.status.contains("Parse error"));
+        assert!(app.status.contains(".facts"));
+    }
+
+    #[test]
+    fn test_load_data_loads_valid_files_when_one_has_parse_error() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(dir.path().join(".facts"), "- first fact\n").unwrap();
+        fs::write(dir.path().join("api.facts"), "- also valid\nbad line\n").unwrap();
+        let app = App::new(dir.path().to_path_buf(), false).unwrap();
+        // .facts loads, api.facts is skipped entirely
+        assert_eq!(app.display_facts.len(), 1);
+        assert_eq!(app.display_facts[0].label, "first fact");
+        assert!(app.status.contains("Parse error"));
+        assert!(app.status.contains("api.facts"));
+    }
+
+    #[test]
+    fn test_load_data_shows_multiple_parse_errors() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(dir.path().join(".facts"), "- label:\n").unwrap();
+        fs::write(dir.path().join("api.facts"), "bad line\n").unwrap();
+        let app = App::new(dir.path().to_path_buf(), false).unwrap();
+        assert!(app.display_facts.is_empty());
+        assert!(app.status.contains("Parse errors in 2 files"));
+    }
+
+    #[test]
+    fn test_refresh_r_with_parse_error_updates_status() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(dir.path().join(".facts"), "- valid\n").unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), false).unwrap();
+        assert!(app.status.is_empty());
+
+        // Corrupt the file on disk
+        fs::write(dir.path().join(".facts"), "bad line\n").unwrap();
+        app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::empty()))
+            .unwrap();
+        assert!(app.status.contains("Parse error"));
+        assert!(app.display_facts.is_empty());
     }
 }
 
