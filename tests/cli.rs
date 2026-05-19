@@ -4129,6 +4129,67 @@ fn fmt_readonly_directory_fails_and_preserves_files() {
 }
 
 #[test]
+fn fmt_reports_formatted_file() {
+    let dir = project("# section\n\n- fact one\n\n\n");
+    facts_cmd(&dir)
+        .arg("fmt")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("formatted"))
+        .stderr(predicate::str::contains(".facts"));
+}
+
+#[test]
+fn fmt_reports_multiple_formatted_files() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    fs::write(
+        dir.path().join("a.facts"),
+        "# section\n\n- fact a\n\n\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("b.facts"),
+        "# section\n\n- fact b\n\n\n",
+    )
+    .unwrap();
+
+    facts_cmd(&dir)
+        .arg("fmt")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("formatted"))
+        .stderr(predicate::str::contains("a.facts"))
+        .stderr(predicate::str::contains("b.facts"));
+}
+
+#[test]
+fn fmt_silent_when_no_changes() {
+    let content = "# section\n\n- label: a fact\n  command: echo hi\n  tags: [mvp]\n";
+    let dir = project(content);
+    facts_cmd(&dir)
+        .arg("fmt")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("formatted").not());
+}
+
+#[test]
+fn fmt_file_reports_formatted() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    fs::write(dir.path().join(".facts"), "- fact one\n").unwrap();
+    fs::write(dir.path().join("api.facts"), "# section\n\n- fact two\n\n\n").unwrap();
+
+    facts_cmd(&dir)
+        .args(["fmt", "--file", "api"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("formatted"))
+        .stderr(predicate::str::contains("api.facts"));
+}
+
+#[test]
 fn lint_warns_unclosed_bracket_tags() {
     let dir = project("- label: test fact\n  tags: [mvp, core\n");
     facts_cmd(&dir)

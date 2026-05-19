@@ -113,6 +113,7 @@ pub fn run(opts: &FmtOptions) -> Result<bool> {
             if opts.check {
                 eprintln!("would reformat {}", path.display());
             } else {
+                eprintln!("formatted {}", path.display());
                 atomic_write(path, &output)
                     .with_context(|| format!("failed to write {}", path.display()))?;
             }
