@@ -147,6 +147,16 @@ fn find_downloader() -> Result<&'static str> {
     bail!("curl or wget is required for self-update");
 }
 
+fn parse_latest_version(body: &str) -> Result<String> {
+    let json: serde_json::Value = serde_json::from_str(body)
+        .context("GitHub API response is not valid JSON")?;
+    let tag = json
+        .get("tag_name")
+        .and_then(|v| v.as_str())
+        .context("could not parse tag_name from GitHub API response")?;
+    Ok(tag.to_string())
+}
+
 fn get_latest_version() -> Result<String> {
     let cmd = find_downloader()?;
     let output = match cmd {
@@ -172,20 +182,7 @@ fn get_latest_version() -> Result<String> {
     }
 
     let body = String::from_utf8_lossy(&output.stdout);
-    let tag = body
-        .lines()
-        .find(|l| l.contains("\"tag_name\""))
-        .and_then(|l| {
-            let after_key = &l[l.find("tag_name")? + "tag_name".len()..];
-            let after_colon = &after_key[after_key.find(':')? + 1..];
-            let open = after_colon.find('"')? + 1;
-            let rest = &after_colon[open..];
-            let close = rest.find('"')?;
-            Some(rest[..close].to_string())
-        })
-        .context("could not parse tag_name from GitHub API response")?;
-
-    Ok(tag)
+    parse_latest_version(&body)
 }
 
 fn download(url: &str, dest: &Path) -> Result<()> {
@@ -402,5 +399,78 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
         let d2 = tempdir().unwrap();
         assert_ne!(d1, d2, "consecutive tempdirs should be unique");
+    }
+
+    #[test]
+    fn test_parse_latest_version_normal() {
+        let body = r#"{"id":123,"tag_name":"v0.5.0","name":"0.5.0"}"#;
+        assert_eq!(parse_latest_version(body).unwrap(), "v0.5.0");
+    }
+
+    #[test]
+    fn test_parse_latest_version_reordered_fields() {
+        let body = r#"{"tag_name":"v1.2.3","id":456,"created_at":"2024-01-01T00:00:00Z"}"#;
+        assert_eq!(parse_latest_version(body).unwrap(), "v1.2.3");
+    }
+
+    #[test]
+    fn test_parse_latest_version_extra_fields() {
+        let body = r#"{"id":789,"tag_name":"v2.0.0-beta.1","extra":"ignored","nested":{"foo":"bar"}}"#;
+        assert_eq!(parse_latest_version(body).unwrap(), "v2.0.0-beta.1");
+    }
+
+    #[test]
+    fn test_parse_latest_version_missing_field() {
+        let body = r#"{"id":123,"name":"release"}"#;
+        let result = parse_latest_version(body);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("tag_name"), "error should mention tag_name: {err}");
+    }
+
+    #[test]
+    fn test_parse_latest_version_malformed_json() {
+        let body = r#"{"id":123,"tag_name":}"#;
+        let result = parse_latest_version(body);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("JSON"), "error should mention JSON: {err}");
+    }
+
+    #[test]
+    fn test_parse_latest_version_null_tag_name() {
+        let body = r#"{"id":123,"tag_name":null}"#;
+        let result = parse_latest_version(body);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("tag_name"), "error should mention tag_name: {err}");
+    }
+
+    #[test]
+    fn test_parse_latest_version_number_tag_name() {
+        let body = r#"{"id":123,"tag_name":1.0}"#;
+        let result = parse_latest_version(body);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("tag_name"), "error should mention tag_name: {err}");
+    }
+
+    #[test]
+    fn test_parse_latest_version_whitespace_variations() {
+        let body = r#"{
+            "id" : 123 ,
+            "tag_name" : "v3.0.0" ,
+            "name" : "release"
+        }"#;
+        assert_eq!(parse_latest_version(body).unwrap(), "v3.0.0");
+    }
+
+    #[test]
+    fn test_parse_latest_version_empty_json() {
+        let body = r#"{}"#;
+        let result = parse_latest_version(body);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("tag_name"), "error should mention tag_name: {err}");
     }
 }
