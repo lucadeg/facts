@@ -81,6 +81,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 draw_form(frame, form, area);
             }
         }
+        Mode::ConfirmDelete => draw_confirm_delete(frame, app, area),
         _ => {}
     }
 }
@@ -368,6 +369,11 @@ fn draw_shortcuts(frame: &mut Frame, app: &App, area: Rect) {
             spans.extend(shortcut("q", "close"));
             spans.extend(shortcut("Esc", "close"));
         }
+        Mode::ConfirmDelete => {
+            spans.extend(shortcut("y", "confirm"));
+            spans.extend(shortcut("n", "cancel"));
+            spans.extend(shortcut("Esc", "cancel"));
+        }
         Mode::Form => {
             spans.extend(shortcut("Tab", "next field"));
             spans.extend(shortcut("S-Tab", "prev field"));
@@ -562,6 +568,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             None => "FORM",
         },
         Mode::Detail => "DETAIL",
+        Mode::ConfirmDelete => "DELETE?",
     };
 
     spans.push(Span::styled(
@@ -625,6 +632,56 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
     let bar = Paragraph::new(Line::from(spans)).style(Style::default().bg(theme::SURFACE));
     frame.render_widget(bar, area);
+}
+
+fn draw_confirm_delete(frame: &mut Frame, app: &App, area: Rect) {
+    let confirm_area = centered_rect(50, 20, area);
+    frame.render_widget(Clear, confirm_area);
+
+    let block = Block::default()
+        .title(Line::from(Span::styled(
+            " DELETE FACT ",
+            Style::default()
+                .fg(theme::FAIL)
+                .add_modifier(Modifier::BOLD),
+        )))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::FAIL))
+        .style(Style::default().bg(theme::BG));
+
+    let inner = block.inner(confirm_area);
+    frame.render_widget(block, confirm_area);
+
+    let id = app.pending_delete.as_deref().unwrap_or("?");
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Delete fact ", Style::default().fg(theme::TEXT)),
+            Span::styled(id.to_string(), Style::default().fg(theme::ACCENT)),
+            Span::styled("?", Style::default().fg(theme::TEXT)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  ", Style::default().fg(theme::TEXT)),
+            Span::styled(
+                "y",
+                Style::default()
+                    .fg(theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" confirm   ", Style::default().fg(theme::MUTED)),
+            Span::styled(
+                "n",
+                Style::default()
+                    .fg(theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" cancel", Style::default().fg(theme::MUTED)),
+        ]),
+    ];
+
+    let dialog = Paragraph::new(lines).style(Style::default().bg(theme::BG));
+    frame.render_widget(dialog, inner);
 }
 
 fn draw_help(frame: &mut Frame, area: Rect) {

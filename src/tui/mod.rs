@@ -38,6 +38,7 @@ pub enum Mode {
     Help,
     Form,
     Detail,
+    ConfirmDelete,
 }
 
 #[derive(Clone)]
@@ -119,6 +120,8 @@ pub struct App {
     pub show_tree: bool,
     pub tree_focused: bool,
     pub tree_filter: Option<String>,
+
+    pub pending_delete: Option<String>,
 }
 
 impl App {
@@ -154,6 +157,7 @@ impl App {
             show_tree: false,
             tree_focused: false,
             tree_filter: None,
+            pending_delete: None,
         };
         app.load_data()?;
         Ok(app)
@@ -372,6 +376,7 @@ impl App {
             Mode::Help => self.handle_help(key),
             Mode::Form => self.handle_form(key),
             Mode::Detail => self.handle_detail(key),
+            Mode::ConfirmDelete => self.handle_confirm_delete(key),
         }
     }
 
@@ -536,15 +541,8 @@ impl App {
             }
             KeyCode::Char('d') => {
                 if let Some(fact) = self.selected_fact() {
-                    let id = fact.id.clone();
-                    let label = fact.label.clone();
-                    match remove::run(&id) {
-                        Ok(()) => {
-                            self.status = format!("Removed: {label}");
-                            self.load_data()?;
-                        }
-                        Err(e) => self.status = format!("Error: {e}"),
-                    }
+                    self.pending_delete = Some(fact.id.clone());
+                    self.mode = Mode::ConfirmDelete;
                 }
             }
             KeyCode::Char('m') => {
@@ -711,22 +709,42 @@ impl App {
                 }
             }
             KeyCode::Char('d') => {
-                self.detail_fact = None;
                 if let Some(fact) = self.selected_fact() {
-                    let id = fact.id.clone();
-                    let label = fact.label.clone();
-                    match remove::run(&id) {
+                    self.pending_delete = Some(fact.id.clone());
+                    self.mode = Mode::ConfirmDelete;
+                } else {
+                    self.detail_fact = None;
+                    self.mode = Mode::Browse;
+                }
+            }
+            KeyCode::Char('x') => {
+                self.run_single_check();
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn handle_confirm_delete(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Char('y') => {
+                if let Some(ref id) = self.pending_delete {
+                    match remove::run_in(id, &self.project_root) {
                         Ok(()) => {
-                            self.status = format!("Removed: {label}");
+                            self.status = format!("Removed: {id}");
                             self.load_data()?;
                         }
                         Err(e) => self.status = format!("Error: {e}"),
                     }
                 }
+                self.pending_delete = None;
                 self.mode = Mode::Browse;
+                self.detail_fact = None;
             }
-            KeyCode::Char('x') => {
-                self.run_single_check();
+            KeyCode::Char('n') | KeyCode::Esc => {
+                self.pending_delete = None;
+                self.mode = Mode::Browse;
+                self.detail_fact = None;
             }
             _ => {}
         }
@@ -1424,6 +1442,123 @@ mod tests {
         assert!(app.form.is_some());
         assert_eq!(app.form.as_ref().unwrap().mode, FormMode::Edit);
         assert_eq!(app.form.as_ref().unwrap().fields[0].value, "first");
+    }
+
+    // === Delete confirmation ===
+
+    #[test]
+    fn test_browse_d_opens_confirm_delete() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        assert_eq!(app.mode, Mode::Browse);
+        let first_id = app.display_facts[0].id.clone();
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.mode, Mode::ConfirmDelete);
+        assert_eq!(app.pending_delete, Some(first_id));
+    }
+
+    #[test]
+    fn test_confirm_delete_y_removes_fact() {
+        let (dir, mut app) = temp_app("- first\n- second\n");
+        let first_id = app.display_facts[0].id.clone();
+        app.pending_delete = Some(first_id);
+        app.mode = Mode::ConfirmDelete;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.mode, Mode::Browse);
+        assert!(app.pending_delete.is_none());
+        // Only "second" should remain
+        assert_eq!(app.display_facts.len(), 1);
+        assert_eq!(app.display_facts[0].label, "second");
+        // The file on disk should also only have second
+        let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+        assert!(content.contains("second"));
+        assert!(!content.contains("first"));
+    }
+
+    #[test]
+    fn test_confirm_delete_n_cancels() {
+        let (dir, mut app) = temp_app("- first\n- second\n");
+        let first_id = app.display_facts[0].id.clone();
+        app.pending_delete = Some(first_id);
+        app.mode = Mode::ConfirmDelete;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.mode, Mode::Browse);
+        assert!(app.pending_delete.is_none());
+        // Both facts should still be present
+        assert_eq!(app.display_facts.len(), 2);
+        let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+        assert!(content.contains("first"));
+        assert!(content.contains("second"));
+    }
+
+    #[test]
+    fn test_confirm_delete_esc_cancels() {
+        let (dir, mut app) = temp_app("- first\n- second\n");
+        let first_id = app.display_facts[0].id.clone();
+        app.pending_delete = Some(first_id);
+        app.mode = Mode::ConfirmDelete;
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.mode, Mode::Browse);
+        assert!(app.pending_delete.is_none());
+        // Both facts should still be present
+        assert_eq!(app.display_facts.len(), 2);
+        let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+        assert!(content.contains("first"));
+        assert!(content.contains("second"));
+    }
+
+    #[test]
+    fn test_detail_d_opens_confirm_delete() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        let first_id = app.display_facts[0].id.clone();
+        app.detail_fact = Some(0);
+        app.mode = Mode::Detail;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.mode, Mode::ConfirmDelete);
+        assert_eq!(app.pending_delete, Some(first_id));
+    }
+
+    #[test]
+    fn test_confirm_delete_from_detail_y_returns_to_browse() {
+        let (dir, mut app) = temp_app("- first\n- second\n");
+        let first_id = app.display_facts[0].id.clone();
+        app.pending_delete = Some(first_id);
+        app.detail_fact = Some(0);
+        app.mode = Mode::ConfirmDelete;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.mode, Mode::Browse);
+        assert!(app.detail_fact.is_none());
+        assert_eq!(app.display_facts.len(), 1);
+        let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+        assert!(!content.contains("first"));
+    }
+
+    #[test]
+    fn test_confirm_delete_from_detail_n_returns_to_browse() {
+        let (dir, mut app) = temp_app("- first\n- second\n");
+        let first_id = app.display_facts[0].id.clone();
+        app.pending_delete = Some(first_id);
+        app.detail_fact = Some(0);
+        app.mode = Mode::ConfirmDelete;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty()))
+            .unwrap();
+        assert_eq!(app.mode, Mode::Browse);
+        assert!(app.detail_fact.is_none());
+        assert_eq!(app.display_facts.len(), 2);
+        let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+        assert!(content.contains("first"));
     }
 }
 
