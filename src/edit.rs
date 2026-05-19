@@ -151,6 +151,18 @@ pub fn run_in(opts: &EditOptions, root: &Path) -> Result<()> {
     let modified_sheets: std::collections::HashSet<usize> =
         resolved.iter().map(|&idx| fact_locations[idx].0).collect();
 
+    // Verify all modified files are writable before making any changes.
+    for &sheet_idx in &modified_sheets {
+        let (ref file_path, _) = sheets[sheet_idx];
+        if file_path.exists() {
+            let metadata = std::fs::metadata(file_path)
+                .with_context(|| format!("failed to read metadata for {}", file_path.display()))?;
+            if metadata.permissions().readonly() {
+                anyhow::bail!("failed to write {}: permission denied", file_path.display());
+            }
+        }
+    }
+
     for sheet_idx in modified_sheets {
         let (ref file_path, ref sheet) = sheets[sheet_idx];
         let output = writer::write(sheet);
@@ -568,5 +580,96 @@ mod tests {
         assert!(result.contains("# section"));
         assert!(result.contains("edited fact"));
         assert!(!result.contains("fact in section"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_edit_readonly_file_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let content = "- fact to edit\n";
+        let (dir, facts_path) = setup_test_dir(content);
+
+        let target_id = find_id_for_label(content, "fact to edit");
+
+        let ro = fs::Permissions::from_mode(0o444);
+        fs::set_permissions(&facts_path, ro).unwrap();
+
+        let opts = EditOptions {
+            target_ids: vec![target_id],
+            label: Some("changed".to_string()),
+            command: None,
+            new_id: None,
+            tags: None,
+            add_tags: None,
+            remove_tags: None,
+        };
+        let result = run_in(&opts, dir.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("permission denied"),
+            "expected permission denied error, got: {err}"
+        );
+
+        let content = fs::read_to_string(&facts_path).unwrap();
+        assert!(
+            content.contains("fact to edit"),
+            "read-only file must not be modified: {content}"
+        );
+
+        let rw = fs::Permissions::from_mode(0o644);
+        fs::set_permissions(&facts_path, rw).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_edit_multiple_files_readonly_second_fails_no_partial_write() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new().unwrap();
+        let facts_path = dir.path().join(".facts");
+        let other_path = dir.path().join("other.facts");
+        fs::write(&facts_path, "- fact one\n").unwrap();
+        fs::write(&other_path, "- fact two\n").unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+
+        let id1 = find_id_for_label("- fact one\n", "fact one");
+        let id2 = find_id_for_label("- fact two\n", "fact two");
+
+        let ro = fs::Permissions::from_mode(0o444);
+        fs::set_permissions(&other_path, ro).unwrap();
+
+        let opts = EditOptions {
+            target_ids: vec![id1, id2],
+            label: None,
+            command: None,
+            new_id: None,
+            tags: None,
+            add_tags: Some(vec!["shared".to_string()]),
+            remove_tags: None,
+        };
+        let result = run_in(&opts, dir.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("permission denied"),
+            "expected permission denied error, got: {err}"
+        );
+
+        let first = fs::read_to_string(&facts_path).unwrap();
+        assert!(
+            !first.contains("shared"),
+            "first file must not be modified when second is read-only: {first}"
+        );
+
+        let second = fs::read_to_string(&other_path).unwrap();
+        assert!(
+            !second.contains("shared"),
+            "read-only second file must not be modified: {second}"
+        );
+
+        let rw = fs::Permissions::from_mode(0o644);
+        fs::set_permissions(&other_path, rw).unwrap();
     }
 }

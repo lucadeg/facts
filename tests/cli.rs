@@ -4962,3 +4962,116 @@ fn rt_with_comma_separated_tags() {
         "c should be removed from the tags list: {content}"
     );
 }
+
+// ===========================================================================
+// add/edit read-only file handling
+// ===========================================================================
+
+#[test]
+#[cfg(unix)]
+fn add_readonly_file_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = project("- existing fact\n");
+
+    let facts_path = dir.path().join(".facts");
+    let ro = fs::Permissions::from_mode(0o444);
+    fs::set_permissions(&facts_path, ro).unwrap();
+
+    facts_cmd(&dir)
+        .args(["add", "new fact"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("permission denied"));
+
+    let content = fs::read_to_string(&facts_path).unwrap();
+    assert!(
+        !content.contains("new fact"),
+        "read-only file must not be modified: {content}"
+    );
+
+    let rw = fs::Permissions::from_mode(0o644);
+    fs::set_permissions(&facts_path, rw).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn edit_readonly_file_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = project("- fact to edit\n");
+
+    let list_output = facts_cmd(&dir).arg("list").output().unwrap();
+    let stdout = String::from_utf8_lossy(&list_output.stdout);
+    let id = stdout
+        .lines()
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap();
+
+    let facts_path = dir.path().join(".facts");
+    let ro = fs::Permissions::from_mode(0o444);
+    fs::set_permissions(&facts_path, ro).unwrap();
+
+    facts_cmd(&dir)
+        .args(["edit", id, "--label", "changed"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("permission denied"));
+
+    let content = fs::read_to_string(&facts_path).unwrap();
+    assert!(
+        content.contains("fact to edit"),
+        "read-only file must not be modified: {content}"
+    );
+
+    let rw = fs::Permissions::from_mode(0o644);
+    fs::set_permissions(&facts_path, rw).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn edit_multiple_files_readonly_second_fails_no_partial_write() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    fs::write(dir.path().join(".facts"), "- fact one\n").unwrap();
+    fs::write(dir.path().join("other.facts"), "- fact two\n").unwrap();
+
+    let list_output = facts_cmd(&dir).arg("list").output().unwrap();
+    let stdout = String::from_utf8_lossy(&list_output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    let id1 = lines[0].split_whitespace().next().unwrap();
+    let id2 = lines[1].split_whitespace().next().unwrap();
+
+    // Make second file read-only
+    let other_path = dir.path().join("other.facts");
+    let ro = fs::Permissions::from_mode(0o444);
+    fs::set_permissions(&other_path, ro).unwrap();
+
+    facts_cmd(&dir)
+        .args(["edit", id1, id2, "--add-tag", "shared"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("permission denied"));
+
+    // First file must remain untouched (no partial write)
+    let first = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert!(
+        !first.contains("shared"),
+        "first file must not be modified when second is read-only: {first}"
+    );
+
+    // Second file must remain untouched
+    let second = fs::read_to_string(&other_path).unwrap();
+    assert!(
+        !second.contains("shared"),
+        "read-only second file must not be modified: {second}"
+    );
+
+    let rw = fs::Permissions::from_mode(0o644);
+    fs::set_permissions(&other_path, rw).unwrap();
+}

@@ -148,6 +148,13 @@ fn run_in(opts: &AddOptions, root: &Path) -> Result<String> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create directory {}", parent.display()))?;
     }
+    if file_path.exists() {
+        let metadata = std::fs::metadata(&file_path)
+            .with_context(|| format!("failed to read metadata for {}", file_path.display()))?;
+        if metadata.permissions().readonly() {
+            anyhow::bail!("failed to write {}: permission denied", file_path.display());
+        }
+    }
     std::fs::write(&file_path, &output)
         .with_context(|| format!("failed to write {}", file_path.display()))?;
 
@@ -622,5 +629,65 @@ mod tests {
         assert!(content.contains("id: xyz"));
         assert!(content.contains("command: echo ok"));
         assert!(content.contains("tags: [mvp]"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_add_readonly_file_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (dir, facts_path) = setup_test_dir();
+        fs::write(&facts_path, "- existing fact\n").unwrap();
+
+        let ro = fs::Permissions::from_mode(0o444);
+        fs::set_permissions(&facts_path, ro).unwrap();
+
+        let opts = AddOptions {
+            label: "new fact".to_string(),
+            file: None,
+            section: None,
+            command: None,
+            id: None,
+            tags: vec![],
+        };
+        let result = run_in(&opts, dir.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("permission denied"),
+            "expected permission denied error, got: {err}"
+        );
+
+        let content = fs::read_to_string(&facts_path).unwrap();
+        assert!(
+            !content.contains("new fact"),
+            "read-only file must not be modified: {content}"
+        );
+
+        let rw = fs::Permissions::from_mode(0o644);
+        fs::set_permissions(&facts_path, rw).unwrap();
+    }
+
+    #[test]
+    fn test_add_unicode_label() {
+        let (dir, facts_path) = setup_test_dir();
+
+        let opts = AddOptions {
+            label: "Unicode: \u{3042}\u{3044}\u{3046} emoji: \u{1F600}".to_string(),
+            file: None,
+            section: None,
+            command: None,
+            id: None,
+            tags: vec![],
+        };
+        let id = run_in(&opts, dir.path()).unwrap();
+
+        let content = fs::read_to_string(&facts_path).unwrap();
+        assert!(content.contains("\u{3042}\u{3044}\u{3046}"));
+        assert!(content.contains("\u{1F600}"));
+
+        // Verify the fact is addressable by its assigned ID.
+        let result = crate::get::run_in(&id, dir.path());
+        assert!(result.is_ok(), "fact with unicode label must be addressable by ID {id}");
     }
 }
