@@ -2,9 +2,12 @@ use anyhow::{Result, bail};
 
 use crate::init::{self, SKILLS};
 use crate::project;
+use std::collections::HashSet;
+use std::path::PathBuf;
 
 pub enum SkillsAction {
     List,
+    ListAll,
     Show { name: String },
     Update,
 }
@@ -12,6 +15,7 @@ pub enum SkillsAction {
 pub fn run(action: &SkillsAction) -> Result<()> {
     match action {
         SkillsAction::List => list(),
+        SkillsAction::ListAll => list_all(),
         SkillsAction::Show { name } => show(name),
         SkillsAction::Update => update(),
     }
@@ -35,7 +39,11 @@ fn show(name: &str) -> Result<()> {
             return Ok(());
         }
     }
-    bail!("unknown skill '{name}'. Run `facts skills` to see available skills.")
+    if let Some(content) = load_local_skill_content(name) {
+        print!("{content}");
+        return Ok(());
+    }
+    bail!("unknown skill '{name}'. Run `facts skills` to see available skills (use `facts skills list-all` to discover skills from ~/.agents/skills and project .agents/skills).")
 }
 
 fn update() -> Result<()> {
@@ -104,4 +112,108 @@ fn extract_description(content: &str) -> String {
     } else {
         full
     }
+}
+
+// --- unified skills list bridge helpers (for tracequest iter15) ---
+
+fn discover_local_skills() -> Vec<(String, String, String)> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut results = Vec::new();
+
+    // bundled first (prefer on name collision)
+    for (name, content) in SKILLS {
+        let n = name.to_string();
+        if seen.insert(n.clone()) {
+            let desc = extract_description(content);
+            results.push((n, desc, "bundled".to_string()));
+        }
+    }
+
+    // scan locations: global then project/local
+    let mut locations: Vec<(PathBuf, String)> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        locations.push((PathBuf::from(home).join(".agents/skills"), "global".to_string()));
+    }
+    let proj_or_cwd = if let Ok(root) = project::find_project_root() {
+        Some(root.join(".agents/skills"))
+    } else if let Ok(cwd) = std::env::current_dir() {
+        Some(cwd.join(".agents/skills"))
+    } else {
+        None
+    };
+    if let Some(p) = proj_or_cwd {
+        locations.push((p, "project".to_string()));
+    }
+
+    for (dir, src) in locations {
+        if !dir.is_dir() {
+            continue;
+        }
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for ent in rd.flatten() {
+                let pth = ent.path();
+                if pth.is_dir() {
+                    if let Some(n) = pth.file_name().and_then(|s| s.to_str()) {
+                        let name = n.to_string();
+                        if seen.contains(&name) {
+                            continue;
+                        }
+                        let md = pth.join("SKILL.md");
+                        if md.is_file() {
+                            if let Ok(content) = std::fs::read_to_string(&md) {
+                                let desc = extract_description(&content);
+                                if seen.insert(name.clone()) {
+                                    results.push((name, desc, src.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    results
+}
+
+fn load_local_skill_content(name: &str) -> Option<String> {
+    let mut locations: Vec<PathBuf> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        locations.push(
+            PathBuf::from(home)
+                .join(".agents/skills")
+                .join(name)
+                .join("SKILL.md"),
+        );
+    }
+    if let Ok(root) = project::find_project_root() {
+        locations.push(
+            root.join(".agents/skills")
+                .join(name)
+                .join("SKILL.md"),
+        );
+    } else if let Ok(cwd) = std::env::current_dir() {
+        locations.push(
+            cwd.join(".agents/skills")
+                .join(name)
+                .join("SKILL.md"),
+        );
+    }
+    for md in locations {
+        if md.is_file() {
+            if let Ok(c) = std::fs::read_to_string(md) {
+                return Some(c);
+            }
+        }
+    }
+    None
+}
+
+fn list_all() -> Result<()> {
+    for (name, desc, source) in discover_local_skills() {
+        println!("{name:20} [{source:7}] {desc}");
+    }
+    println!();
+    println!("Use `facts skills show <name>` to read a skill (now unifies bundled + .agents/skills).");
+    println!("Use `facts skills update` to install or update the bundled facts-* skills in your project.");
+    Ok(())
 }

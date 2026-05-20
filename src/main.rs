@@ -35,8 +35,9 @@ Start here (for AI agents):\n  \
   facts skills show facts\n\n  \
   Skills ship with the CLI and include the full workflow, format spec,\n  \
   and command reference. Read the skill before using the CLI.\n\n  \
-  skills [list]               List available skills\n  \
-  skills show <name>          Read a skill (facts, facts-discover, ...)\n  \
+  skills [list]               List available (bundled facts-*) skills\n  \
+  skills list-all             List ALL discoverable (bundled + ~/.agents + project .agents)\n  \
+  skills show <name>          Read a skill (facts-* or any from .agents/skills)\n  \
   skills update               Install/update skills in the project\n\n  \
 Common short aliases (all args passed through):\n  \
   ll = list --light     ls = list\n  \
@@ -237,9 +238,14 @@ enum Command {
 enum SkillsCommand {
     /// Show available skills with descriptions.
     List,
+    /// List *all* discoverable skills: the 4 bundled facts-* plus any from
+    /// $HOME/.agents/skills/*/SKILL.md and <project>/.agents/skills/*/SKILL.md
+    /// (with [source] tag and short description from frontmatter). This is the
+    /// unified skills list bridge.
+    ListAll,
     /// Print the full content of a skill.
     Show {
-        /// Skill name (e.g. "facts", "facts-discover").
+        /// Skill name (e.g. "facts", "facts-discover", or any .agents skill like "bugbash").
         name: String,
     },
     /// Install or update skills in the current project.
@@ -451,6 +457,7 @@ fn main() -> anyhow::Result<()> {
             let action = match action {
                 Some(SkillsCommand::Show { name }) => skills::SkillsAction::Show { name },
                 Some(SkillsCommand::Update) => skills::SkillsAction::Update,
+                Some(SkillsCommand::ListAll) => skills::SkillsAction::ListAll,
                 Some(SkillsCommand::List) | None => skills::SkillsAction::List,
             };
             skills::run(&action)?;
