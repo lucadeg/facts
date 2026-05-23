@@ -724,3 +724,42 @@
 - a FactSheet contains Sections; Facts belong to exactly one Section @review-fix @draft @implemented
 - check runs the command for each fact that has one and records passed/failed/manual status @review-fix @draft @implemented
 - manual facts (no command) are verified by a human or agent reading the code and stating PASS or FAIL with a one-line reason @review-fix @draft @implemented
+
+# documentation
+
+## wiki
+- label: the facts.wiki directory contains a _Sidebar.md for navigation that links to all major articles
+  command: test -f ../facts.wiki/_Sidebar.md
+  tags: [implemented]
+- label: Home.md in facts.wiki serves as the landing page and prominently features the terms 'fact-driven development' and 'facts cli' in headings and intro
+  command: test -f ../facts.wiki/Home.md && grep -q "fact-driven development" ../facts.wiki/Home.md && grep -q "facts cli" ../facts.wiki/Home.md
+  tags: [implemented]
+- label: Fact-Driven-Development.md exists in the wiki and explains the methodology with code examples and comparison to traditional specs
+  command: test -f ../facts.wiki/Fact-Driven-Development.md
+  tags: [implemented]
+- label: Fluffy-Specs.md (or equivalent) exists and positions facts as the antidote for vague/fluffy specifications used with AI coding agents
+  command: test -f ../facts.wiki/Fluffy-Specs.md || test -f ../facts.wiki/Antidote-for-Fluffy-Specs.md
+  tags: [implemented]
+- label: Facts-File-Format.md provides a complete, searchable reference to the .facts file format, sections, facts, tags, IDs, and YAML/Markdown syntax
+  command: test -f ../facts.wiki/Facts-File-Format.md
+  tags: [implemented]
+- label: Facts-Check.md is dedicated to the 'facts check' command, its output (pass/fail/manual), filters, CI usage, and timeout features
+  command: test -f ../facts.wiki/Facts-Check.md
+  tags: [implemented]
+- label: Facts-Lifecycle.md documents the tags and the agent-driven workflow using facts-discover, facts-refine and facts-implement skills
+  command: test -f ../facts.wiki/Facts-Lifecycle.md
+  tags: [implemented]
+- label: Facts-with-AI-Agents.md (or Claude) explains integration with Claude Code, Cursor, and other LLM agents, including the bundled skills and init workflow
+  command: test -f ../facts.wiki/Facts-with-AI-Agents.md || test -f ../facts.wiki/Using-Facts-with-AI-Agents.md
+  tags: [implemented]
+- label: Facts-CLI-Reference.md lists all subcommands, short aliases (ll, at, rt, rm), filters (--tags, --search, --section, --depth), and TUI entrypoint
+  command: test -f ../facts.wiki/Facts-CLI-Reference.md
+  tags: [implemented]
+- label: Installing-Facts.md (or integrated in home) covers all distribution methods: curl install.sh, npm pipx facts-cli, and cargo
+  command: test -f ../facts.wiki/Installing-Facts.md || grep -q "Installing Facts" ../facts.wiki/Home.md
+  tags: [implemented]
+
+## readme
+- label: the README includes a nicely formatted link to the GitHub wiki at https://github.com/av/facts/wiki with the index and a few key pages (Fact-Driven Development, File Format, CLI Reference, etc.)
+  command: grep -q "github.com/av/facts/wiki" README.md
+  tags: [implemented]

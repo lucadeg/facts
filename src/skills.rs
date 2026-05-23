@@ -43,7 +43,9 @@ fn show(name: &str) -> Result<()> {
         print!("{content}");
         return Ok(());
     }
-    bail!("unknown skill '{name}'. Run `facts skills` to see available skills (use `facts skills list-all` to discover skills from ~/.agents/skills and project .agents/skills).")
+    bail!(
+        "unknown skill '{name}'. Run `facts skills` to see available skills (use `facts skills list-all` to discover skills from ~/.agents/skills and project .agents/skills)."
+    )
 }
 
 fn update() -> Result<()> {
@@ -132,7 +134,10 @@ fn discover_local_skills() -> Vec<(String, String, String)> {
     // scan locations: global then project/local
     let mut locations: Vec<(PathBuf, String)> = Vec::new();
     if let Ok(home) = std::env::var("HOME") {
-        locations.push((PathBuf::from(home).join(".agents/skills"), "global".to_string()));
+        locations.push((
+            PathBuf::from(home).join(".agents/skills"),
+            "global".to_string(),
+        ));
     }
     let proj_or_cwd = if let Ok(root) = project::find_project_root() {
         Some(root.join(".agents/skills"))
@@ -152,20 +157,20 @@ fn discover_local_skills() -> Vec<(String, String, String)> {
         if let Ok(rd) = std::fs::read_dir(&dir) {
             for ent in rd.flatten() {
                 let pth = ent.path();
-                if pth.is_dir() {
-                    if let Some(n) = pth.file_name().and_then(|s| s.to_str()) {
-                        let name = n.to_string();
-                        if seen.contains(&name) {
-                            continue;
-                        }
-                        let md = pth.join("SKILL.md");
-                        if md.is_file() {
-                            if let Ok(content) = std::fs::read_to_string(&md) {
-                                let desc = extract_description(&content);
-                                if seen.insert(name.clone()) {
-                                    results.push((name, desc, src.clone()));
-                                }
-                            }
+                if pth.is_dir()
+                    && let Some(n) = pth.file_name().and_then(|s| s.to_str())
+                {
+                    let name = n.to_string();
+                    if seen.contains(&name) {
+                        continue;
+                    }
+                    let md = pth.join("SKILL.md");
+                    if md.is_file()
+                        && let Ok(content) = std::fs::read_to_string(&md)
+                    {
+                        let desc = extract_description(&content);
+                        if seen.insert(name.clone()) {
+                            results.push((name, desc, src.clone()));
                         }
                     }
                 }
@@ -186,23 +191,15 @@ fn load_local_skill_content(name: &str) -> Option<String> {
         );
     }
     if let Ok(root) = project::find_project_root() {
-        locations.push(
-            root.join(".agents/skills")
-                .join(name)
-                .join("SKILL.md"),
-        );
+        locations.push(root.join(".agents/skills").join(name).join("SKILL.md"));
     } else if let Ok(cwd) = std::env::current_dir() {
-        locations.push(
-            cwd.join(".agents/skills")
-                .join(name)
-                .join("SKILL.md"),
-        );
+        locations.push(cwd.join(".agents/skills").join(name).join("SKILL.md"));
     }
     for md in locations {
-        if md.is_file() {
-            if let Ok(c) = std::fs::read_to_string(md) {
-                return Some(c);
-            }
+        if md.is_file()
+            && let Ok(c) = std::fs::read_to_string(md)
+        {
+            return Some(c);
         }
     }
     None
@@ -213,7 +210,11 @@ fn list_all() -> Result<()> {
         println!("{name:20} [{source:7}] {desc}");
     }
     println!();
-    println!("Use `facts skills show <name>` to read a skill (now unifies bundled + .agents/skills).");
-    println!("Use `facts skills update` to install or update the bundled facts-* skills in your project.");
+    println!(
+        "Use `facts skills show <name>` to read a skill (now unifies bundled + .agents/skills)."
+    );
+    println!(
+        "Use `facts skills update` to install or update the bundled facts-* skills in your project."
+    );
     Ok(())
 }

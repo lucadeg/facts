@@ -170,6 +170,21 @@ facts uninit                             # remove facts from project
 
 ---
 
+## Wiki
+
+Extended documentation and the full article index live in the [facts GitHub wiki](https://github.com/av/facts/wiki):
+
+- [Fact-Driven Development](https://github.com/av/facts/wiki/Fact-Driven-Development) — the methodology in depth with examples
+- [.facts File Format](https://github.com/av/facts/wiki/Facts-File-Format) — complete syntax, sections, tags, and IDs reference
+- [Facts CLI Reference](https://github.com/av/facts/wiki/Facts-CLI-Reference) — all subcommands, aliases (ll, at, rt), filters, and TUI
+- [Facts Lifecycle](https://github.com/av/facts/wiki/Facts-Lifecycle) — @draft → @spec → @implemented workflow with agent skills
+- [Facts with AI Agents](https://github.com/av/facts/wiki/Facts-with-AI-Agents) — integration with Claude, Cursor, and other agents
+- [Facts Check](https://github.com/av/facts/wiki/Facts-Check) — verification, CI, filters, and manual facts
+
+The [Home page](https://github.com/av/facts/wiki/Home) and sidebar index every guide.
+
+---
+
 ## Dogfooding
 
 This repo uses a `.facts` file to describe itself: 224 facts, 154 verified by command, none failing.
