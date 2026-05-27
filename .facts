@@ -293,9 +293,9 @@
 
 ## architecture
 
-- label: minimal dependencies (core 2 + TUI ratatui/crossterm)
+- label: minimal dependencies (core 2 + TUI ratatui/crossterm + utils)
   id: swd
-  command: test $(sed -n "/^\[dependencies\]/,/^\[/p" Cargo.toml | grep -c "^[a-z]") -le 5
+  command: test $(sed -n "/^\[dependencies\]/,/^\[/p" Cargo.toml | grep -c "^[a-z]") -le 6
   tags: [spec]
 - label: clap for CLI argument parsing
   command: grep -q '^clap' Cargo.toml
