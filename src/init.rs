@@ -844,8 +844,22 @@ fn detect_terraform(root: &Path) -> Option<DetectedStack> {
 // Content generation
 // ---------------------------------------------------------------------------
 
+/// Comment block added to the top of generated .facts files, giving new
+/// users a hint about `.config` and agent verification.
+const CONFIG_HINT: &str = "\
+# To enable agent verification of manual facts, uncomment and edit:
+# - label: facts configuration
+#   id: .config
+#   agent: claude
+#   batch-size: 10
+# Or run: facts config set agent claude
+
+";
+
 pub fn generate_facts_content(stacks: &[DetectedStack]) -> String {
     let mut out = String::new();
+
+    out.push_str(CONFIG_HINT);
 
     if stacks.is_empty() {
         out.push_str("# project\n\n");

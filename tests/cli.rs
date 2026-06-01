@@ -5243,6 +5243,187 @@ fn config_lint_passes_with_extra_keys() {
     facts_cmd(&dir).arg("lint").assert().success();
 }
 
+#[test]
+fn config_show_no_config_shows_available_keys() {
+    let dir = project("- some fact\n");
+    facts_cmd(&dir)
+        .args(["config", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no configuration set"))
+        .stdout(predicate::str::contains("Available keys:"))
+        .stdout(predicate::str::contains("agent:"))
+        .stdout(predicate::str::contains("batch-size:"))
+        .stdout(predicate::str::contains("facts config set"));
+}
+
+#[test]
+fn config_show_no_config_in_empty_project() {
+    let dir = empty_project();
+    facts_cmd(&dir)
+        .args(["config", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no configuration set"));
+}
+
+#[test]
+fn config_set_unknown_key_warns() {
+    let dir = project("- some fact\n");
+    facts_cmd(&dir)
+        .args(["config", "set", "unknown-key", "value"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("not a known config key"))
+        .stderr(predicate::str::contains("agent, batch-size"));
+}
+
+#[test]
+fn config_set_known_key_no_warning() {
+    let dir = project("- some fact\n");
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn config_set_batch_size_known_no_warning() {
+    let dir = project("- some fact\n");
+    facts_cmd(&dir)
+        .args(["config", "set", "batch-size", "5"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn config_rm_last_key_removes_config_fact() {
+    let dir = project("- some fact\n");
+    // Set then remove the only key.
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "test"])
+        .assert()
+        .success();
+    facts_cmd(&dir)
+        .args(["config", "rm", "agent"])
+        .assert()
+        .success();
+
+    // .config fact should be gone entirely.
+    let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert!(!content.contains(".config"), "content: {content}");
+    assert!(
+        !content.contains("facts configuration"),
+        "content: {content}"
+    );
+}
+
+#[test]
+fn config_rm_non_last_key_keeps_config_fact() {
+    let dir = project("- some fact\n");
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "test"])
+        .assert()
+        .success();
+    facts_cmd(&dir)
+        .args(["config", "set", "batch-size", "5"])
+        .assert()
+        .success();
+    // Remove one key, other should remain.
+    facts_cmd(&dir)
+        .args(["config", "rm", "agent"])
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert!(content.contains(".config"), "content: {content}");
+    assert!(content.contains("batch-size: 5"), "content: {content}");
+    assert!(!content.contains("agent"), "content: {content}");
+}
+
+#[test]
+fn init_generated_file_has_config_hint() {
+    let dir = empty_project();
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"test\"\n",
+    )
+    .unwrap();
+
+    facts_cmd(&dir).arg("init").assert().success();
+
+    let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert!(
+        content.contains("agent: claude"),
+        "should show agent hint: {content}"
+    );
+    assert!(
+        content.contains("batch-size: 10"),
+        "should show batch-size hint: {content}"
+    );
+    assert!(
+        content.contains("facts config set"),
+        "should show CLI alternative: {content}"
+    );
+}
+
+#[test]
+fn init_generated_file_config_hint_is_commented() {
+    let dir = empty_project();
+    facts_cmd(&dir).arg("init").assert().success();
+
+    let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    // The .config example should be commented out (lines start with #).
+    assert!(
+        content.contains("# - label: facts configuration"),
+        "config example should be commented: {content}"
+    );
+    assert!(
+        content.contains("#   id: .config"),
+        ".config id should be commented: {content}"
+    );
+}
+
+#[test]
+fn init_generated_file_parses_and_lints_cleanly() {
+    let dir = empty_project();
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"test\"\n",
+    )
+    .unwrap();
+
+    facts_cmd(&dir).arg("init").assert().success();
+
+    // Lint should pass (comments are ignored by the parser).
+    facts_cmd(&dir).arg("lint").assert().success();
+
+    // Check should work (no parse errors from the commented config).
+    facts_cmd(&dir).arg("check").assert(); // don't assert success since commands may fail
+}
+
+#[test]
+fn config_show_after_rm_last_key_shows_no_config() {
+    let dir = project("- some fact\n");
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "test"])
+        .assert()
+        .success();
+    facts_cmd(&dir)
+        .args(["config", "rm", "agent"])
+        .assert()
+        .success();
+
+    // After removing the only key, show should indicate no config.
+    facts_cmd(&dir)
+        .args(["config", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no configuration set"));
+}
+
 // ===========================================================================
 // check --agent
 // ===========================================================================

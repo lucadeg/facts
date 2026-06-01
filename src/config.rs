@@ -14,6 +14,19 @@ use crate::writer;
 const CONFIG_ID: &str = ".config";
 const CONFIG_LABEL: &str = "facts configuration";
 
+/// Known configuration keys with descriptions. Used for validation hints and
+/// the `config show` empty-state help.
+const KNOWN_KEYS: &[(&str, &str)] = &[
+    (
+        "agent",
+        "preset name (claude, codex, pi, droid, opencode, mi) or shell command template with %p",
+    ),
+    (
+        "batch-size",
+        "number of manual facts per agent batch (default: 10)",
+    ),
+];
+
 pub enum ConfigAction {
     Get { key: String },
     Set { key: String, value: String },
@@ -46,7 +59,20 @@ fn config_get(root: &Path, key: &str) -> Result<()> {
     anyhow::bail!("config key '{key}' not found");
 }
 
+fn is_known_key(key: &str) -> bool {
+    KNOWN_KEYS.iter().any(|(k, _)| *k == key)
+}
+
 fn config_set(root: &Path, key: &str, value: &str) -> Result<()> {
+    if !is_known_key(key) {
+        let known: Vec<&str> = KNOWN_KEYS.iter().map(|(k, _)| *k).collect();
+        eprintln!(
+            "warning: '{}' is not a known config key (known: {})",
+            key,
+            known.join(", ")
+        );
+    }
+
     let _lock = FileLock::acquire(root)?;
     let facts_path = root.join(".facts");
 
@@ -101,9 +127,22 @@ fn config_set(root: &Path, key: &str, value: &str) -> Result<()> {
 }
 
 fn config_show(root: &Path) -> Result<()> {
-    let (_, fact) = find_config_fact(root)?;
-    for (k, v) in &fact.extra {
-        println!("{k}: {v}");
+    match find_config_fact(root) {
+        Ok((_, fact)) if !fact.extra.is_empty() => {
+            for (k, v) in &fact.extra {
+                println!("{k}: {v}");
+            }
+        }
+        _ => {
+            println!("(no configuration set)");
+            println!();
+            println!("Available keys:");
+            for (key, desc) in KNOWN_KEYS {
+                println!("  {key}: {desc}");
+            }
+            println!();
+            println!("Set a value:  facts config set <key> <value>");
+        }
     }
     Ok(())
 }
@@ -125,7 +164,21 @@ fn config_rm(root: &Path, key: &str) -> Result<()> {
     if fact.extra.len() == before {
         anyhow::bail!("config key '{key}' not found");
     }
-    fact.raw = writer::fact_to_raw(fact);
+
+    // If no keys remain, remove the .config fact entirely.
+    if fact.extra.is_empty() {
+        match &location {
+            FactLocation::Preamble(i) => {
+                sheet.preamble.remove(*i);
+            }
+            FactLocation::Section(path, j) => {
+                let section = locate::navigate_to_section_mut(&mut sheet.sections, path);
+                section.facts.remove(*j);
+            }
+        }
+    } else {
+        fact.raw = writer::fact_to_raw(fact);
+    }
 
     let output = writer::write(&sheet);
     std::fs::write(&facts_path, &output)
@@ -335,5 +388,65 @@ mod tests {
         let dir = setup_test_dir("- id: .config\n  label: facts configuration\n  agent: test\n");
         let (_, fact) = find_config_fact(dir.path()).unwrap();
         assert_eq!(fact.label, CONFIG_LABEL);
+    }
+
+    #[test]
+    fn test_is_known_key_agent() {
+        assert!(is_known_key("agent"));
+    }
+
+    #[test]
+    fn test_is_known_key_batch_size() {
+        assert!(is_known_key("batch-size"));
+    }
+
+    #[test]
+    fn test_is_known_key_unknown() {
+        assert!(!is_known_key("foo"));
+        assert!(!is_known_key(""));
+        assert!(!is_known_key("Agent")); // case-sensitive
+    }
+
+    #[test]
+    fn test_config_show_no_config_succeeds() {
+        let dir = setup_test_dir("- some fact\n");
+        // Should succeed (not error) when no .config exists.
+        let result = run_in(&ConfigAction::Show, dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_config_rm_last_key_removes_fact() {
+        let dir = setup_test_dir("- id: .config\n  label: facts configuration\n  agent: claude\n");
+        run_in(
+            &ConfigAction::Rm {
+                key: "agent".to_string(),
+            },
+            dir.path(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+        assert!(!content.contains(".config"));
+        assert!(!content.contains("facts configuration"));
+    }
+
+    #[test]
+    fn test_config_rm_non_last_key_keeps_fact() {
+        let dir = setup_test_dir(
+            "- id: .config\n  label: facts configuration\n  agent: claude\n  batch-size: 5\n",
+        );
+        run_in(
+            &ConfigAction::Rm {
+                key: "agent".to_string(),
+            },
+            dir.path(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+        assert!(content.contains(".config"));
+        assert!(content.contains("batch-size: 5"));
+        assert!(!content.contains("agent"));
     }
 }
