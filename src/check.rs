@@ -22,6 +22,7 @@ pub struct CheckOptions {
     pub depth: Option<usize>,
     pub timeout: Option<u64>,
     pub agent: Option<String>,
+    pub no_agent: bool,
     pub batch_size: usize,
 }
 
@@ -419,14 +420,48 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
     }
 
     // Agent verification of manual facts.
-    let agent_template = agent::resolve_agent(opts.agent.as_deref(), &root);
-    if let Some(ref template) = agent_template
+    let resolved_agent = if opts.no_agent {
+        None
+    } else {
+        agent::resolve_agent(opts.agent.as_deref(), &root)
+    };
+    if let Some(ref agent) = resolved_agent
         && !manual_facts.is_empty()
     {
+        let total_batches = manual_facts.len().div_ceil(opts.batch_size);
+        let _ = writeln!(
+            out,
+            "\n{}",
+            color::dim(&format!(
+                "Verifying {} manual facts with {} ({} batch{})...",
+                manual_facts.len(),
+                agent.name,
+                total_batches,
+                if total_batches == 1 { "" } else { "es" },
+            )),
+        );
+        let _ = out.flush();
+
+        let is_tty = color::enabled();
         for batch_start in (0..manual_facts.len()).step_by(opts.batch_size) {
             let batch_end = (batch_start + opts.batch_size).min(manual_facts.len());
             let batch = &manual_facts[batch_start..batch_end];
-            let batch_result = agent::run_batch(template, batch, &root);
+            let batch_num = batch_start / opts.batch_size + 1;
+
+            if is_tty {
+                let _ = write!(
+                    out,
+                    "  {}",
+                    color::dim(&format!("… batch {batch_num}/{total_batches}")),
+                );
+                let _ = out.flush();
+            }
+
+            let batch_result = agent::run_batch(&agent.template, batch, &root);
+
+            if is_tty {
+                let _ = write!(out, "\r\x1b[2K");
+            }
 
             for (i, (_, verdict)) in batch_result.verdicts.iter().enumerate() {
                 let result_idx = manual_indices[batch_start + i];

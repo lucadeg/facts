@@ -116,8 +116,8 @@ fn config_rm(root: &Path, key: &str) -> Result<()> {
         .with_context(|| format!("failed to read {}", facts_path.display()))?;
     let mut sheet = parser::parse(&content, ".facts")?;
 
-    let location = find_config_location(&sheet)
-        .ok_or_else(|| anyhow::anyhow!("no .config fact found"))?;
+    let location =
+        find_config_location(&sheet).ok_or_else(|| anyhow::anyhow!("no .config fact found"))?;
 
     let fact = locate::get_fact_mut(&mut sheet, &location);
     let before = fact.extra.len();
@@ -230,9 +230,8 @@ mod tests {
 
     #[test]
     fn test_config_get() {
-        let dir = setup_test_dir(
-            "- id: .config\n  label: facts configuration\n  agent: claude -p %p\n",
-        );
+        let dir =
+            setup_test_dir("- id: .config\n  label: facts configuration\n  agent: claude -p %p\n");
         run_in(
             &ConfigAction::Get {
                 key: "agent".to_string(),
@@ -244,9 +243,8 @@ mod tests {
 
     #[test]
     fn test_config_get_missing_key() {
-        let dir = setup_test_dir(
-            "- id: .config\n  label: facts configuration\n  agent: claude -p %p\n",
-        );
+        let dir =
+            setup_test_dir("- id: .config\n  label: facts configuration\n  agent: claude -p %p\n");
         let result = run_in(
             &ConfigAction::Get {
                 key: "nonexistent".to_string(),
@@ -284,9 +282,8 @@ mod tests {
 
     #[test]
     fn test_config_rm_missing_key() {
-        let dir = setup_test_dir(
-            "- id: .config\n  label: facts configuration\n  agent: claude -p %p\n",
-        );
+        let dir =
+            setup_test_dir("- id: .config\n  label: facts configuration\n  agent: claude -p %p\n");
         let result = run_in(
             &ConfigAction::Rm {
                 key: "nonexistent".to_string(),
@@ -298,9 +295,8 @@ mod tests {
 
     #[test]
     fn test_config_set_updates_existing() {
-        let dir = setup_test_dir(
-            "- id: .config\n  label: facts configuration\n  agent: claude -p %p\n",
-        );
+        let dir =
+            setup_test_dir("- id: .config\n  label: facts configuration\n  agent: claude -p %p\n");
         run_in(
             &ConfigAction::Set {
                 key: "agent".to_string(),
@@ -336,9 +332,7 @@ mod tests {
 
     #[test]
     fn test_config_label_must_be_facts_configuration() {
-        let dir = setup_test_dir(
-            "- id: .config\n  label: facts configuration\n  agent: test\n",
-        );
+        let dir = setup_test_dir("- id: .config\n  label: facts configuration\n  agent: test\n");
         let (_, fact) = find_config_fact(dir.path()).unwrap();
         assert_eq!(fact.label, CONFIG_LABEL);
     }

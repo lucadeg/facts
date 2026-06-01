@@ -50,7 +50,9 @@ pub struct Fact {
 
 impl Fact {
     pub fn is_config(&self) -> bool {
-        self.explicit_id.as_deref().is_some_and(|id| id.starts_with('.'))
+        self.explicit_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with('.'))
     }
 }
 

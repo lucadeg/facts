@@ -1017,7 +1017,7 @@ impl App {
             .collect();
         let root = self.project_root.clone();
         let timeout = self.check_timeout;
-        let agent_template = if self.agent_disabled {
+        let resolved_agent = if self.agent_disabled {
             None
         } else {
             crate::agent::resolve_agent(None, &root)
@@ -1053,7 +1053,7 @@ impl App {
                 return;
             }
 
-            if let Some(ref template) = agent_template {
+            if let Some(ref agent) = resolved_agent {
                 for (idx, _, _) in &manual_facts {
                     if tx.send((*idx, CheckResult::AgentPending)).is_err() {
                         return;
@@ -1081,7 +1081,7 @@ impl App {
                     }
                     let batch_end = (batch_start + 10).min(agent_inputs.len());
                     let batch = &agent_inputs[batch_start..batch_end];
-                    let result = crate::agent::run_batch(template, batch, &root);
+                    let result = crate::agent::run_batch(&agent.template, batch, &root);
 
                     for (i, (_, verdict)) in result.verdicts.iter().enumerate() {
                         let idx = manual_facts[batch_start + i].0;
@@ -1120,12 +1120,8 @@ impl App {
                 }
                 match &status {
                     CheckResult::Passed | CheckResult::AgentPassed => self.check_passed += 1,
-                    CheckResult::Failed(_) | CheckResult::AgentFailed(_) => {
-                        self.check_failed += 1
-                    }
-                    CheckResult::Manual | CheckResult::AgentUnresolved => {
-                        self.check_manual += 1
-                    }
+                    CheckResult::Failed(_) | CheckResult::AgentFailed(_) => self.check_failed += 1,
+                    CheckResult::Manual | CheckResult::AgentUnresolved => self.check_manual += 1,
                     CheckResult::AgentPending => {}
                 }
                 self.check_results.insert(idx, status);

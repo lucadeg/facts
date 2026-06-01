@@ -5238,15 +5238,69 @@ fn config_set_creates_file() {
 
 #[test]
 fn config_lint_passes_with_extra_keys() {
-    let dir = project(
-        "- id: .config\n  label: facts configuration\n  agent: claude -p %p\n  batch: 5\n",
-    );
+    let dir =
+        project("- id: .config\n  label: facts configuration\n  agent: claude -p %p\n  batch: 5\n");
     facts_cmd(&dir).arg("lint").assert().success();
 }
 
 // ===========================================================================
 // check --agent
 // ===========================================================================
+
+/// Helper: write a mock agent script that extracts fact IDs from the prompt
+/// and emits fact-verdict XML tags. `verdict_fn` is a shell expression that
+/// maps each extracted ID to the verdict content (e.g. "PASS" or "FAIL reason").
+fn write_agent_script(dir: &TempDir, name: &str, body: &str) -> String {
+    let script_path = dir.path().join(name);
+    fs::write(&script_path, body).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    script_path.to_string_lossy().to_string()
+}
+
+/// Agent script that emits PASS for every fact ID in the prompt.
+fn pass_all_agent_script(dir: &TempDir) -> String {
+    write_agent_script(
+        dir,
+        "mock_agent.sh",
+        r#"#!/bin/sh
+# Extract all [ID] tokens from the prompt and emit PASS for each.
+echo "$1" | grep -oP '\[\K[^\]]+' | while read -r id; do
+    echo "<fact-verdict id=\"$id\">PASS</fact-verdict>"
+done
+"#,
+    )
+}
+
+/// Agent script that emits FAIL for every fact ID in the prompt.
+fn fail_all_agent_script(dir: &TempDir) -> String {
+    write_agent_script(
+        dir,
+        "mock_agent.sh",
+        r#"#!/bin/sh
+echo "$1" | grep -oP '\[\K[^\]]+' | while read -r id; do
+    echo "<fact-verdict id=\"$id\">FAIL not true</fact-verdict>"
+done
+"#,
+    )
+}
+
+/// Agent script that exits non-zero (simulating agent failure).
+fn failing_agent_script(dir: &TempDir) -> String {
+    write_agent_script(dir, "mock_agent.sh", "#!/bin/sh\nexit 1\n")
+}
+
+/// Agent script that produces no fact-verdict tags (simulating unresolved).
+fn silent_agent_script(dir: &TempDir) -> String {
+    write_agent_script(
+        dir,
+        "mock_agent.sh",
+        "#!/bin/sh\necho 'I have no verdicts'\n",
+    )
+}
 
 #[test]
 fn check_agent_flag_accepted() {
@@ -5267,13 +5321,328 @@ fn check_batch_size_flag_accepted() {
 }
 
 #[test]
-fn check_agent_with_manual_facts() {
-    let dir = project("- a manual fact\n");
+fn check_no_agent_flag_accepted() {
+    let dir = project("- manual fact\n");
+    facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("manual"));
+}
+
+#[test]
+fn check_agent_and_no_agent_conflict() {
+    let dir = project("- manual fact\n");
+    facts_cmd(&dir)
+        .args(["check", "--agent", "echo noop", "--no-agent"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_agent_passes_manual_facts() {
+    let dir = project("- manual fact one\n- manual fact two\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(agent)"))
+        .stdout(predicate::str::contains("2 passed"));
+}
+
+#[test]
+fn check_agent_fails_manual_facts() {
+    let dir = project("- manual fact one\n");
+    let script = fail_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("1 failed"));
+}
+
+#[test]
+fn check_agent_fail_shows_reason() {
+    let dir = project("- manual fact one\n");
+    let script = fail_all_agent_script(&dir);
+    let template = format!("{script} %p");
     let output = facts_cmd(&dir)
-        .args(["check", "--agent", &format!("echo '<fact-verdict id=\"'$(echo %p | grep -oP '\\[\\K[^]]+' | head -1)'\">PASS</fact-verdict>'")])
+        .args(["check", "--agent", &template])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Should have some output (agent attempted)
-    assert!(stdout.contains("manual") || stdout.contains("agent") || stdout.contains("unresolved"));
+    assert!(
+        stdout.contains("not true"),
+        "expected reason in output: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_process_failure_causes_unresolved() {
+    let dir = project("- manual fact one\n");
+    let script = failing_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("unresolved"));
+}
+
+#[test]
+fn check_agent_no_verdict_tags_causes_unresolved() {
+    let dir = project("- manual fact one\n");
+    let script = silent_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("unresolved"));
+}
+
+#[test]
+fn check_agent_unresolved_exits_nonzero() {
+    let dir = project("- manual fact one\n");
+    let script = silent_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_agent_mixed_command_and_manual() {
+    let dir = project("- label: command fact\n  command: \"true\"\n- manual fact\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 passed"))
+        .stdout(predicate::str::contains("(agent)"));
+}
+
+#[test]
+fn check_agent_only_runs_on_manual_facts() {
+    // All facts have commands — agent should not be invoked at all.
+    let dir =
+        project("- label: fact one\n  command: \"true\"\n- label: fact two\n  command: \"true\"\n");
+    let script = failing_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 passed"))
+        .stdout(predicate::str::contains("0 manual"));
+}
+
+#[test]
+fn check_agent_announcement_shows_agent_name_and_count() {
+    let dir = project("- manual one\n- manual two\n- manual three\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Announcement should mention the number of manual facts
+    assert!(
+        stdout.contains("3 manual facts"),
+        "expected announcement with count in output: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_summary_shows_agent_counts() {
+    let dir = project("- manual one\n- manual two\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Agent summary line should show agent pass count
+    assert!(
+        stdout.contains("2 passed") && stdout.contains("(agent)"),
+        "expected agent summary in output: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_respects_tag_filter() {
+    // Only manual facts matching the --tags filter should go to agent.
+    let dir = project("- manual one @mvp\n- manual two @blocked\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template, "--tags", "mvp"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Only the @mvp fact should appear
+    assert!(
+        stdout.contains("manual one"),
+        "expected @mvp fact in output: {stdout}"
+    );
+    assert!(
+        !stdout.contains("manual two"),
+        "expected @blocked fact to be filtered out: {stdout}"
+    );
+}
+
+#[test]
+fn check_no_agent_skips_agent_verification() {
+    let dir = project("- manual fact\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // With --no-agent, manual facts stay as manual — no agent summary.
+    assert!(
+        stdout.contains("1 manual"),
+        "expected manual count in output: {stdout}"
+    );
+    assert!(
+        !stdout.contains("(agent)"),
+        "expected no agent results in output: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_preset_name_accepted() {
+    // Using a preset name that doesn't exist on PATH should still be accepted
+    // as a flag value. The agent will fail to execute, but the flag parsing works.
+    let dir = project("- manual fact\n");
+    // Use a real preset name — it won't be in restricted PATH, so it fails to run.
+    facts_cmd(&dir)
+        .args(["check", "--agent", "claude"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_agent_config_override() {
+    // Set agent in .config, verify it's used.
+    let dir =
+        project("- id: .config\n  label: facts configuration\n  agent: echo PASS\n- manual fact\n");
+    // With restricted PATH and no --agent, should fall back to .config agent.
+    // The agent is "echo PASS" which won't produce valid verdict XML, so facts are unresolved.
+    facts_cmd(&dir)
+        .args(["check"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("unresolved"));
+}
+
+#[test]
+fn check_agent_batch_size_splits_batches() {
+    // 3 manual facts with batch size 2 should create 2 batches.
+    let dir = project("- manual one\n- manual two\n- manual three\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template, "--batch-size", "2"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Should mention 2 batches in announcement
+    assert!(
+        stdout.contains("2 batch"),
+        "expected 2 batches in output: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_with_ansi_in_output() {
+    // Agent output with ANSI codes should still be parsed correctly.
+    let dir = project("- manual fact\n");
+    let script = write_agent_script(
+        &dir,
+        "mock_agent.sh",
+        r#"#!/bin/sh
+# Extract ID and wrap verdict in ANSI codes
+ID=$(echo "$1" | grep -oP '\[\K[^\]]+' | head -1)
+printf '\033[32m<fact-verdict id="%s">PASS</fact-verdict>\033[0m\n' "$ID"
+"#,
+    );
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(agent)"));
+}
+
+#[test]
+fn check_agent_with_markdown_fences_in_output() {
+    // Agent output wrapped in markdown fences should still parse.
+    let dir = project("- manual fact\n");
+    let script = write_agent_script(
+        &dir,
+        "mock_agent.sh",
+        r#"#!/bin/sh
+ID=$(echo "$1" | grep -oP '\[\K[^\]]+' | head -1)
+echo '```xml'
+printf '<fact-verdict id="%s">PASS</fact-verdict>\n' "$ID"
+echo '```'
+"#,
+    );
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(agent)"));
+}
+
+#[test]
+fn check_agent_last_verdict_wins() {
+    // When multiple verdicts for the same ID, last one should win.
+    let dir = project("- manual fact\n");
+    let script = write_agent_script(
+        &dir,
+        "mock_agent.sh",
+        r#"#!/bin/sh
+ID=$(echo "$1" | grep -oP '\[\K[^\]]+' | head -1)
+printf '<fact-verdict id="%s">FAIL first attempt</fact-verdict>\n' "$ID"
+printf '<fact-verdict id="%s">PASS</fact-verdict>\n' "$ID"
+"#,
+    );
+    let template = format!("{script} %p");
+    // Last verdict is PASS, so should succeed.
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(agent)"));
+}
+
+#[test]
+fn check_agent_respects_search_filter() {
+    let dir = project("- alpha manual fact\n- beta manual fact\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template, "--search", "alpha"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("alpha"),
+        "expected alpha fact in output: {stdout}"
+    );
+    assert!(
+        !stdout.contains("beta"),
+        "expected beta fact filtered out: {stdout}"
+    );
 }

@@ -112,8 +112,12 @@ enum Command {
         timeout: Option<u64>,
 
         /// Agent command template (e.g. "claude -p %p") or preset name (claude, codex, pi, droid, opencode, mi).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "no_agent")]
         agent: Option<String>,
+
+        /// Skip agent verification of manual facts.
+        #[arg(long, conflicts_with = "agent")]
+        no_agent: bool,
 
         /// Number of manual facts per agent batch (default: 10).
         #[arg(long)]
@@ -397,6 +401,7 @@ fn main() -> anyhow::Result<()> {
             depth,
             timeout,
             agent,
+            no_agent,
             batch_size,
         }) => {
             let opts = check::CheckOptions {
@@ -405,6 +410,7 @@ fn main() -> anyhow::Result<()> {
                 depth,
                 timeout,
                 agent,
+                no_agent,
                 batch_size: batch_size.unwrap_or(10),
             };
             let all_passed = check::run(&opts)?;

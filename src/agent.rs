@@ -60,38 +60,44 @@ pub struct AgentBatchResult {
     pub verdicts: Vec<(String, AgentVerdict)>,
 }
 
+/// A resolved agent with its command template and display name.
+pub struct ResolvedAgent {
+    pub template: String,
+    pub name: String,
+}
+
 /// Resolve which agent command to use.
 /// Priority: explicit --agent flag > .config agent key > PATH auto-detect.
-pub fn resolve_agent(
-    flag: Option<&str>,
-    project_root: &Path,
-) -> Option<String> {
+pub fn resolve_agent(flag: Option<&str>, project_root: &Path) -> Option<ResolvedAgent> {
     if let Some(agent) = flag {
-        let template = resolve_preset_or_literal(agent);
-        return Some(template);
+        let (template, name) = resolve_preset_or_literal(agent);
+        return Some(ResolvedAgent { template, name });
     }
 
     if let Some(config_val) = crate::config::read_config_value(project_root, "agent") {
-        let template = resolve_preset_or_literal(&config_val);
-        return Some(template);
+        let (template, name) = resolve_preset_or_literal(&config_val);
+        return Some(ResolvedAgent { template, name });
     }
 
     auto_detect_agent()
 }
 
-fn resolve_preset_or_literal(agent: &str) -> String {
+fn resolve_preset_or_literal(agent: &str) -> (String, String) {
     for preset in PRESETS {
         if preset.name == agent {
-            return preset.template.to_string();
+            return (preset.template.to_string(), preset.name.to_string());
         }
     }
-    agent.to_string()
+    (agent.to_string(), agent.to_string())
 }
 
-fn auto_detect_agent() -> Option<String> {
+fn auto_detect_agent() -> Option<ResolvedAgent> {
     for preset in PRESETS {
         if which_exists(preset.name) {
-            return Some(preset.template.to_string());
+            return Some(ResolvedAgent {
+                template: preset.template.to_string(),
+                name: preset.name.to_string(),
+            });
         }
     }
     None
@@ -148,11 +154,7 @@ fn shell_escape(s: &str) -> String {
 }
 
 /// Run an agent batch and return verdicts.
-pub fn run_batch(
-    template: &str,
-    facts: &[ManualFact],
-    project_root: &Path,
-) -> AgentBatchResult {
+pub fn run_batch(template: &str, facts: &[ManualFact], project_root: &Path) -> AgentBatchResult {
     let prompt = build_prompt(facts);
     let escaped = shell_escape(&prompt);
     let command = template.replace("%p", &escaped);
@@ -307,11 +309,17 @@ mod tests {
 
     #[test]
     fn test_resolve_preset() {
-        assert_eq!(resolve_preset_or_literal("claude"), "claude -p %p");
-        assert_eq!(resolve_preset_or_literal("codex"), "codex exec %p");
+        assert_eq!(
+            resolve_preset_or_literal("claude"),
+            ("claude -p %p".to_string(), "claude".to_string())
+        );
+        assert_eq!(
+            resolve_preset_or_literal("codex"),
+            ("codex exec %p".to_string(), "codex".to_string())
+        );
         assert_eq!(
             resolve_preset_or_literal("custom cmd %p"),
-            "custom cmd %p"
+            ("custom cmd %p".to_string(), "custom cmd %p".to_string())
         );
     }
 
@@ -343,7 +351,9 @@ mod tests {
             section_path: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
-        assert!(matches!(result.verdicts[0].1, AgentVerdict::Fail(ref r) if r == "not implemented yet"));
+        assert!(
+            matches!(result.verdicts[0].1, AgentVerdict::Fail(ref r) if r == "not implemented yet")
+        );
     }
 
     #[test]
@@ -436,13 +446,16 @@ mod tests {
         ];
         let result = parse_verdicts(output, &facts);
         assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
-        assert!(matches!(result.verdicts[1].1, AgentVerdict::Fail(ref r) if r == "missing feature"));
+        assert!(
+            matches!(result.verdicts[1].1, AgentVerdict::Fail(ref r) if r == "missing feature")
+        );
         assert!(matches!(result.verdicts[2].1, AgentVerdict::Pass));
     }
 
     #[test]
     fn test_ansi_around_verdicts() {
-        let output = "\x1b[1m\x1b[32m<fact-verdict id=\"x\">\x1b[0mPASS\x1b[32m</fact-verdict>\x1b[0m";
+        let output =
+            "\x1b[1m\x1b[32m<fact-verdict id=\"x\">\x1b[0mPASS\x1b[32m</fact-verdict>\x1b[0m";
         let facts = vec![ManualFact {
             id: "x".to_string(),
             label: "test".to_string(),

@@ -561,21 +561,63 @@
 - manual facts footer wording is precise ('verify each against the code and state PASS or FAIL with a one-line reason') @implemented
 
 ### agent
-- --agent flag accepts a shell command template with %p as the prompt placeholder, or a preset name @implemented
-- --agent presets: claude="claude -p %p", codex="codex exec %p", pi="pi -p %p", droid="droid exec %p", opencode="opencode run %p", mi="mi -p %p" @implemented
-- --agent operates only on manual facts remaining after --tags, --search, and other filters @implemented
-- manual facts are batched into a single agent invocation, default 10 facts per batch @implemented
-- --batch-size N overrides the default batch size of 10 for --agent invocations @implemented
-- %p is shell-escaped and includes: fact-verdict XML format instructions, the list of fact IDs with their labels and section paths, and instructions to verify each against the codebase @implemented
-- agent output is parsed for <fact-verdict id="ID">PASS</fact-verdict> and <fact-verdict id="ID">FAIL reason</fact-verdict> tags @implemented
-- parser strips ANSI escape codes and markdown fences before extracting fact-verdict tags @implemented
-- when a fact ID appears in multiple fact-verdict tags, last match wins @implemented
-- facts with no matching fact-verdict tag in agent output are reported as unresolved in the summary @implemented
-- agent process failure (non-zero exit or spawn error) means all facts in that batch are unresolved @implemented
-- summary line includes agent-verified counts: N passed, N failed, N unresolved (agent) @implemented
-- unresolved agent facts cause non-zero exit, same as command failures @implemented
-- when no --agent flag and no .config agent key, auto-detects by scanning PATH for preset binaries in order: claude, codex, pi, droid, opencode, mi @implemented
-- .config agent key overrides auto-detection, --agent flag overrides both @implemented
+- label: --agent flag accepts a shell command template with %p as the prompt placeholder, or a preset name
+  command: cargo run -- check --agent "echo %p" --help 2>&1 | grep -q 'agent'
+  tags: [implemented]
+- label: --agent presets include claude, codex, pi, droid, opencode, mi with correct templates
+  command: grep -q '"claude"' src/agent.rs && grep -q '"codex"' src/agent.rs && grep -q '"pi"' src/agent.rs && grep -q '"droid"' src/agent.rs && grep -q '"opencode"' src/agent.rs && grep -q '"mi"' src/agent.rs
+  tags: [implemented]
+- label: --agent operates only on manual facts remaining after --tags, --search, and other filters
+  command: grep -q 'manual_facts' src/check.rs && grep -q 'opts.tags_expr' src/check.rs && grep -q 'opts.search_expr' src/check.rs
+  tags: [implemented]
+- label: manual facts are batched into a single agent invocation, default 10 facts per batch
+  command: grep -q 'batch_size' src/check.rs && grep -q 'step_by(opts.batch_size)' src/check.rs
+  tags: [implemented]
+- label: --batch-size N overrides the default batch size of 10 for --agent invocations
+  command: cargo run -- check --help 2>&1 | grep -q 'batch-size'
+  tags: [implemented]
+- label: '%p' is shell-escaped and includes fact-verdict XML format instructions, fact IDs with labels and section paths
+  command: grep -q 'shell_escape' src/agent.rs && grep -q 'fact-verdict' src/agent.rs && grep -q 'build_prompt' src/agent.rs
+  tags: [implemented]
+- label: agent output is parsed for fact-verdict XML tags with PASS and FAIL verdicts
+  command: grep -q 'find_fact_verdicts' src/agent.rs && grep -q 'fact-verdict' src/agent.rs
+  tags: [implemented]
+- label: parser strips ANSI escape codes and markdown fences before extracting fact-verdict tags
+  command: grep -q 'strip_ansi_and_fences' src/agent.rs
+  tags: [implemented]
+- label: when a fact ID appears in multiple fact-verdict tags, last match wins
+  command: grep -q 'verdict_map.insert' src/agent.rs && cargo test test_parse_verdicts_last_wins -- --nocapture 2>&1 | grep -q 'ok'
+  tags: [implemented]
+- label: facts with no matching fact-verdict tag in agent output are reported as unresolved in the summary
+  command: grep -q 'AgentUnresolved' src/check.rs && grep -q 'unresolved' src/check.rs
+  tags: [implemented]
+- label: agent process failure (non-zero exit or spawn error) means all facts in that batch are unresolved
+  command: grep -q 'AgentVerdict::Unresolved' src/agent.rs && cargo test test_parse_verdicts_unresolved -- --nocapture 2>&1 | grep -q 'ok'
+  tags: [implemented]
+- label: summary line includes agent-verified counts (passed, failed, unresolved)
+  command: grep -q 'agent_passed' src/check.rs && grep -q 'agent_failed' src/check.rs && grep -q 'agent_unresolved' src/check.rs
+  tags: [implemented]
+- label: unresolved agent facts cause non-zero exit, same as command failures
+  command: grep -q 'agent_unresolved > 0' src/check.rs
+  tags: [implemented]
+- label: when no --agent flag and no .config agent key, auto-detects by scanning PATH for preset binaries in order
+  command: grep -q 'auto_detect_agent' src/agent.rs && grep -q 'which_exists' src/agent.rs
+  tags: [implemented]
+- label: .config agent key overrides auto-detection, --agent flag overrides both
+  command: grep -q 'read_config_value.*agent' src/agent.rs && grep -q 'if let Some(agent) = flag' src/agent.rs
+  tags: [implemented]
+- label: no-agent flag suppresses agent auto-detection and skips agent verification entirely
+  command: cargo run -- check --no-agent --help 2>&1 | grep -q 'no-agent'
+  tags: [implemented]
+- label: check prints agent announcement before starting agent phase: agent name and manual fact count
+  command: grep -q 'Verifying.*manual facts with' src/check.rs
+  tags: [implemented]
+- label: check prints per-batch progress on TTY with carriage-return overwrite
+  command: grep -q 'batch {batch_num}/{total_batches}' src/check.rs
+  tags: [implemented]
+- label: resolve_agent returns the detected agent display name alongside the template
+  command: grep -q 'pub struct ResolvedAgent' src/agent.rs
+  tags: [implemented]
 
 ## skills
 - skills list shows all installed skills with name and description @implemented
