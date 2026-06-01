@@ -252,6 +252,19 @@ pub fn run_batch(
     }
 }
 
+/// Format an error message for a failed agent process, including exit code
+/// and the first line of stderr as a hint when available.
+fn format_exit_error(code: i32, stderr: &str) -> String {
+    let hint = stderr
+        .trim()
+        .lines()
+        .next()
+        .filter(|l| !l.is_empty())
+        .map(|l| format!(": {l}"))
+        .unwrap_or_default();
+    format!("agent exited with code {code}{hint}")
+}
+
 /// Run agent command without timeout, returning (stdout, stderr) or an error message.
 fn run_agent_no_timeout(mut cmd: Command) -> Result<(String, String), String> {
     match cmd.output() {
@@ -263,15 +276,20 @@ fn run_agent_no_timeout(mut cmd: Command) -> Result<(String, String), String> {
         Ok(output) => {
             let code = output.status.code().unwrap_or(1);
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            let stderr_hint = if stderr.trim().is_empty() {
-                String::new()
-            } else {
-                format!(": {}", stderr.trim().lines().next().unwrap_or(""))
-            };
-            Err(format!("agent exited with code {code}{stderr_hint}"))
+            Err(format_exit_error(code, &stderr))
         }
         Err(e) => Err(format!("failed to run agent: {e}")),
     }
+}
+
+/// Read all content from an optional pipe, returning empty string if absent.
+fn drain_pipe(pipe: Option<impl std::io::Read>) -> String {
+    pipe.map(|mut r| {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut r, &mut buf).ok();
+        buf
+    })
+    .unwrap_or_default()
 }
 
 /// Run agent command with timeout, returning (stdout, stderr) or an error message.
@@ -290,34 +308,12 @@ fn run_agent_with_timeout(
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let stdout = child
-                    .stdout
-                    .take()
-                    .map(|mut s| {
-                        let mut buf = String::new();
-                        std::io::Read::read_to_string(&mut s, &mut buf).ok();
-                        buf
-                    })
-                    .unwrap_or_default();
-                let stderr = child
-                    .stderr
-                    .take()
-                    .map(|mut e| {
-                        let mut buf = String::new();
-                        std::io::Read::read_to_string(&mut e, &mut buf).ok();
-                        buf
-                    })
-                    .unwrap_or_default();
+                let stdout = drain_pipe(child.stdout.take());
+                let stderr = drain_pipe(child.stderr.take());
                 if status.success() {
                     return Ok((stdout, stderr));
                 }
-                let code = status.code().unwrap_or(1);
-                let stderr_hint = if stderr.trim().is_empty() {
-                    String::new()
-                } else {
-                    format!(": {}", stderr.trim().lines().next().unwrap_or(""))
-                };
-                return Err(format!("agent exited with code {code}{stderr_hint}"));
+                return Err(format_exit_error(status.code().unwrap_or(1), &stderr));
             }
             Ok(None) => {
                 if start.elapsed() >= timeout {

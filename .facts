@@ -65,11 +65,11 @@
 
 ### lifecycle
 - three well-known tags drive the agent workflow: @draft, @spec, @implemented
-- @draft — rough idea, needs refinement and atomization
-- — precise and actionable, ready to implement @implemented
-- @implemented — true and backed by code
+- the draft tag marks rough ideas that need refinement and atomization
+- the spec tag marks precise and actionable facts, ready to implement
+- the implemented tag marks facts that are true and backed by code
 - untagged facts are ground truth — verified against the codebase
-- the lifecycle is a pipeline: → → @draft @implemented
+- the lifecycle is a pipeline: draft to spec to implemented
 - facts-discover classifies facts by checking them against the codebase
 - each agent skill owns one lifecycle transition
 
@@ -181,10 +181,10 @@
 - label: --timeout flag sets a per-command timeout
   command: facts check --help 2>&1 | grep -q '\-\-timeout'
 - label: --quiet flag (-q) suppresses all output, exit code only
-  command: facts check --help 2>&1 | grep -q '\-\-quiet' && grep -q 'quiet' src/check.rs
+  command: cargo run -- check --help 2>&1 | grep -q -- '--quiet' && grep -q 'quiet' src/check.rs
   tags: [implemented]
 - label: --verbose flag (-v) shows agent prompts and raw output
-  command: facts check --help 2>&1 | grep -q '\-\-verbose' && grep -q 'verbose' src/check.rs
+  command: cargo run -- check --help 2>&1 | grep -q -- '--verbose' && grep -q 'verbose' src/check.rs
   tags: [implemented]
 - label: filter expressions support and, or, not, and parentheses
   command: grep -q "and\|or\|not\|parse_expr" src/tags.rs
@@ -217,7 +217,7 @@
 - label: light mode composes with existing filters
   command: cargo test list_light_composes_with_filters -- --nocapture 2>&1 | grep -q "test result: ok"
   tags: [implemented]
-- label: light mode shows tags inline with @tag notation in different colors
+- label: light mode shows tags inline in different colors
   command: cargo test list_light_shows_tags -- --nocapture 2>&1 | grep -q "test result: ok"
   tags: [implemented]
 
@@ -405,7 +405,7 @@
 ### facts-refine
 - label: operates on facts — refines them into precise facts with the user
   command: grep -q "@draft" skills/facts-refine/SKILL.md && grep -q "@spec" skills/facts-refine/SKILL.md
-  tags: [draft, implemented]
+  tags: [implemented]
 - interactive — proposes changes, user decides
 - every change discussed with user before applying
 - label: identifies vague, compound, contradictory, and gapped facts
@@ -582,7 +582,7 @@
   command: grep -q 'manual_facts' src/check.rs && grep -q 'opts.tags_expr' src/check.rs && grep -q 'opts.search_expr' src/check.rs
   tags: [implemented]
 - label: manual facts are batched into a single agent invocation, default 10 facts per batch
-  command: grep -q 'batch_size' src/check.rs && grep -q 'step_by(opts.batch_size)' src/check.rs
+  command: grep -q 'batch_size' src/check.rs && grep -q 'step_by(batch_size)' src/check.rs
   tags: [implemented]
 - label: --batch-size N overrides the default batch size of 10 for --agent invocations
   command: cargo run -- check --help 2>&1 | grep -q 'batch-size'
@@ -656,7 +656,7 @@
 - label: init replaces the agent docs section between markers when content differs from the binary's embedded version
   command: grep -q "existing_section == AGENT_DOCS_SECTION" src/init.rs
   tags: [implemented]
-- .claude/settings.local.json is gitignored (personal Claude Code sandbox permissions must never be committed) @review-fix @draft @implemented
+- .claude/settings.local.json is gitignored (personal Claude Code sandbox permissions must never be committed) @implemented
 
 ## remove
 - label: remove deletes the .facts file if removing the last fact leaves it empty (symmetric to empty section cleanup)
@@ -813,12 +813,12 @@
   command: grep -q 'never.*npx facts' skills/facts/SKILL.md
 
 # domain
-- a FactSheet is a parsed .facts file containing an optional preamble and a list of Sections @review-fix @draft @implemented
-- a Section is a heading-delimited group of Facts; sections nest via heading depth (e.g. cli/check) @review-fix @draft @implemented
-- a Fact is an atomic, validatable truth statement with a label, optional command, optional tags, and an ID @review-fix @draft @implemented
-- a FactSheet contains Sections; Facts belong to exactly one Section @review-fix @draft @implemented
-- check runs the command for each fact that has one and records passed/failed/manual status @review-fix @draft @implemented
-- manual facts (no command) are verified by a human or agent reading the code and stating PASS or FAIL with a one-line reason @review-fix @draft @implemented
+- a FactSheet is a parsed .facts file containing an optional preamble and a list of Sections @implemented
+- a Section is a heading-delimited group of Facts; sections nest via heading depth (e.g. cli/check) @implemented
+- a Fact is an atomic, validatable truth statement with a label, optional command, optional tags, and an ID @implemented
+- a FactSheet contains Sections; Facts belong to exactly one Section @implemented
+- check runs the command for each fact that has one and records passed/failed/manual status @implemented
+- manual facts (no command) are verified by a human or agent reading the code and stating PASS or FAIL with a one-line reason @implemented
 
 # documentation
 
