@@ -97,6 +97,9 @@ pub fn fact_to_raw(fact: &Fact) -> String {
             let tag_list = fact.tags.join(", ");
             lines.push(format!("  tags: [{tag_list}]"));
         }
+        for (key, val) in &fact.extra {
+            lines.push(format!("  {key}: {val}"));
+        }
         lines.join("\n")
     }
 }
@@ -185,6 +188,7 @@ mod tests {
             is_plain: true,
             raw: String::new(),
             blank_lines_before: 0,
+            extra: Vec::new(),
         };
         assert_eq!(fact_to_raw(&fact), "- a simple fact");
     }
@@ -199,6 +203,7 @@ mod tests {
             is_plain: true,
             raw: String::new(),
             blank_lines_before: 0,
+            extra: Vec::new(),
         };
         assert_eq!(fact_to_raw(&fact), "- a tagged fact @mvp @core");
     }
@@ -213,6 +218,7 @@ mod tests {
             is_plain: false,
             raw: String::new(),
             blank_lines_before: 0,
+            extra: Vec::new(),
         };
         assert_eq!(
             fact_to_raw(&fact),
@@ -230,6 +236,7 @@ mod tests {
             is_plain: false,
             raw: String::new(),
             blank_lines_before: 0,
+            extra: Vec::new(),
         };
         assert_eq!(
             fact_to_raw(&fact),
@@ -247,6 +254,7 @@ mod tests {
             is_plain: true,
             raw: String::new(),
             blank_lines_before: 0,
+            extra: Vec::new(),
         };
         assert_eq!(fact_to_raw(&fact), "- label: command: echo hello");
     }
@@ -261,6 +269,7 @@ mod tests {
             is_plain: true,
             raw: String::new(),
             blank_lines_before: 0,
+            extra: Vec::new(),
         };
         assert_eq!(fact_to_raw(&fact), "- label: label: something");
     }
@@ -275,6 +284,7 @@ mod tests {
             is_plain: true,
             raw: String::new(),
             blank_lines_before: 0,
+            extra: Vec::new(),
         };
         assert_eq!(fact_to_raw(&fact), "- label: id: something");
     }
@@ -289,6 +299,7 @@ mod tests {
             is_plain: true,
             raw: String::new(),
             blank_lines_before: 0,
+            extra: Vec::new(),
         };
         assert_eq!(fact_to_raw(&fact), "- label: tags: [a, b]");
     }
@@ -314,6 +325,7 @@ mod tests {
             is_plain: true,
             raw: String::new(),
             blank_lines_before: 0,
+            extra: Vec::new(),
         };
         let raw = fact_to_raw(&fact);
         let content = format!("{raw}\n");

@@ -131,6 +131,7 @@ fn run_in(opts: &AddOptions, root: &Path) -> Result<String> {
         is_plain,
         raw: String::new(),
         blank_lines_before: 0,
+        extra: Vec::new(),
     };
 
     fact.raw = writer::fact_to_raw(&fact);

@@ -18,6 +18,7 @@ pub struct ListOptions {
     pub search_expr: Option<String>,
     pub depth: Option<usize>,
     pub light: bool,
+    pub all: bool,
 }
 
 /// Run the list subcommand. Returns `true` if any facts were listed.
@@ -78,6 +79,10 @@ pub fn run(opts: &ListOptions) -> Result<bool> {
             fact_idx += 1;
 
             if !file_matches {
+                continue;
+            }
+
+            if !opts.all && fact.is_config() {
                 continue;
             }
 

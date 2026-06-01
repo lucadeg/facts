@@ -33,6 +33,9 @@ fn facts_cmd(dir: &TempDir) -> Command {
     // Force no color — stdout is a pipe, so TTY detection disables color automatically,
     // but this makes intent explicit.
     cmd.env("NO_COLOR", "1");
+    // Restrict PATH to system dirs so agent auto-detection doesn't find
+    // binaries like claude/codex that would cause non-deterministic test runs.
+    cmd.env("PATH", "/usr/bin:/bin");
     cmd
 }
 
@@ -5089,4 +5092,188 @@ fn edit_multiple_files_readonly_second_fails_no_partial_write() {
 
     let rw = fs::Permissions::from_mode(0o644);
     fs::set_permissions(&other_path, rw).unwrap();
+}
+
+// ===========================================================================
+// config subcommand
+// ===========================================================================
+
+#[test]
+fn config_set_and_get() {
+    let dir = project("- some fact\n");
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "claude -p %p"])
+        .assert()
+        .success();
+
+    facts_cmd(&dir)
+        .args(["config", "get", "agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("claude -p %p"));
+}
+
+#[test]
+fn config_show_lists_all() {
+    let dir = project("- some fact\n");
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "test-agent"])
+        .assert()
+        .success();
+    facts_cmd(&dir)
+        .args(["config", "set", "batch-size", "5"])
+        .assert()
+        .success();
+
+    facts_cmd(&dir)
+        .args(["config", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("agent: test-agent"))
+        .stdout(predicate::str::contains("batch-size: 5"));
+}
+
+#[test]
+fn config_ls_alias() {
+    let dir = project("- some fact\n");
+    facts_cmd(&dir)
+        .args(["config", "set", "key", "val"])
+        .assert()
+        .success();
+
+    facts_cmd(&dir)
+        .args(["config", "ls"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("key: val"));
+}
+
+#[test]
+fn config_rm_removes_key() {
+    let dir = project("- some fact\n");
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "test"])
+        .assert()
+        .success();
+    facts_cmd(&dir)
+        .args(["config", "rm", "agent"])
+        .assert()
+        .success();
+
+    facts_cmd(&dir)
+        .args(["config", "get", "agent"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn config_hidden_from_list() {
+    let dir = project("- some fact\n");
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "test"])
+        .assert()
+        .success();
+
+    let output = facts_cmd(&dir).arg("list").output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains(".config"));
+    assert!(!stdout.contains("facts configuration"));
+}
+
+#[test]
+fn config_visible_with_all() {
+    let dir = project("- some fact\n");
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "test"])
+        .assert()
+        .success();
+
+    facts_cmd(&dir)
+        .args(["list", "--all"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("facts configuration"));
+}
+
+#[test]
+fn config_skipped_by_check() {
+    let dir = project("- some fact\n");
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "test"])
+        .assert()
+        .success();
+
+    let output = facts_cmd(&dir).arg("check").output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains(".config"));
+    assert!(!stdout.contains("facts configuration"));
+}
+
+#[test]
+fn config_get_dot_config_shows_pairs() {
+    let dir = project("- some fact\n");
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "test-agent"])
+        .assert()
+        .success();
+
+    facts_cmd(&dir)
+        .args(["get", ".config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("agent: test-agent"));
+}
+
+#[test]
+fn config_set_creates_file() {
+    let dir = empty_project();
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "test"])
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert!(content.contains("id: .config"));
+}
+
+#[test]
+fn config_lint_passes_with_extra_keys() {
+    let dir = project(
+        "- id: .config\n  label: facts configuration\n  agent: claude -p %p\n  batch: 5\n",
+    );
+    facts_cmd(&dir).arg("lint").assert().success();
+}
+
+// ===========================================================================
+// check --agent
+// ===========================================================================
+
+#[test]
+fn check_agent_flag_accepted() {
+    let dir = project("- label: passes\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--agent", "echo noop"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_batch_size_flag_accepted() {
+    let dir = project("- label: passes\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--agent", "echo noop", "--batch-size", "5"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_agent_with_manual_facts() {
+    let dir = project("- a manual fact\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &format!("echo '<fact-verdict id=\"'$(echo %p | grep -oP '\\[\\K[^]]+' | head -1)'\">PASS</fact-verdict>'")])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Should have some output (agent attempted)
+    assert!(stdout.contains("manual") || stdout.contains("agent") || stdout.contains("unresolved"));
 }

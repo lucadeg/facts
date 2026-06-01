@@ -46,6 +46,10 @@ pub enum CheckResult {
     Passed,
     Failed(String),
     Manual,
+    AgentPending,
+    AgentPassed,
+    AgentFailed(String),
+    AgentUnresolved,
 }
 
 pub struct DisplayFact {
@@ -123,6 +127,7 @@ pub struct App {
 
     pub pending_delete: Option<String>,
     pub check_timeout: Option<Duration>,
+    pub agent_disabled: bool,
 }
 
 impl App {
@@ -160,6 +165,7 @@ impl App {
             tree_filter: None,
             pending_delete: None,
             check_timeout: Some(Duration::from_secs(30)),
+            agent_disabled: false,
         };
         app.load_data()?;
         Ok(app)
@@ -989,21 +995,43 @@ impl App {
         let (tx, rx) = mpsc::channel();
         self.check_rx = Some(rx);
 
-        let facts: Vec<(usize, Option<String>)> = self
+        let facts: Vec<(usize, Option<String>, String, String)> = self
             .display_facts
             .iter()
-            .map(|f| (f.global_index, f.command.clone()))
+            .map(|f| {
+                (
+                    f.global_index,
+                    f.command.clone(),
+                    f.id.clone(),
+                    format!(
+                        "{}{}",
+                        if f.section_path.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{}/", f.section_path.join("/"))
+                        },
+                        f.label
+                    ),
+                )
+            })
             .collect();
         let root = self.project_root.clone();
         let timeout = self.check_timeout;
+        let agent_template = if self.agent_disabled {
+            None
+        } else {
+            crate::agent::resolve_agent(None, &root)
+        };
 
         std::thread::spawn(move || {
-            for (idx, command) in facts {
+            let mut manual_facts: Vec<(usize, String, String)> = Vec::new();
+
+            for (idx, command, fact_id, fact_path) in &facts {
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
                 let status = match command {
-                    Some(ref cmd) => {
+                    Some(cmd) => {
                         let (exit_code, stderr) = crate::check::run_command(cmd, &root, timeout);
                         if exit_code == 0 {
                             CheckResult::Passed
@@ -1011,10 +1039,63 @@ impl App {
                             CheckResult::Failed(stderr)
                         }
                     }
-                    None => CheckResult::Manual,
+                    None => {
+                        manual_facts.push((*idx, fact_id.clone(), fact_path.clone()));
+                        CheckResult::Manual
+                    }
                 };
-                if tx.send((idx, status)).is_err() {
-                    break;
+                if tx.send((*idx, status)).is_err() {
+                    return;
+                }
+            }
+
+            if cancel.load(Ordering::Relaxed) || manual_facts.is_empty() {
+                return;
+            }
+
+            if let Some(ref template) = agent_template {
+                for (idx, _, _) in &manual_facts {
+                    if tx.send((*idx, CheckResult::AgentPending)).is_err() {
+                        return;
+                    }
+                }
+
+                let agent_inputs: Vec<crate::agent::ManualFact> = manual_facts
+                    .iter()
+                    .map(|(_, id, path)| {
+                        let (section_path, label) = match path.rfind('/') {
+                            Some(pos) => (path[..pos].to_string(), path[pos + 1..].to_string()),
+                            None => (String::new(), path.clone()),
+                        };
+                        crate::agent::ManualFact {
+                            id: id.clone(),
+                            label,
+                            section_path,
+                        }
+                    })
+                    .collect();
+
+                for batch_start in (0..agent_inputs.len()).step_by(10) {
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let batch_end = (batch_start + 10).min(agent_inputs.len());
+                    let batch = &agent_inputs[batch_start..batch_end];
+                    let result = crate::agent::run_batch(template, batch, &root);
+
+                    for (i, (_, verdict)) in result.verdicts.iter().enumerate() {
+                        let idx = manual_facts[batch_start + i].0;
+                        let status = match verdict {
+                            crate::agent::AgentVerdict::Pass => CheckResult::AgentPassed,
+                            crate::agent::AgentVerdict::Fail(r) => {
+                                CheckResult::AgentFailed(r.clone())
+                            }
+                            crate::agent::AgentVerdict::Unresolved => CheckResult::AgentUnresolved,
+                        };
+                        if tx.send((idx, status)).is_err() {
+                            return;
+                        }
+                    }
                 }
             }
         });
@@ -1033,16 +1114,30 @@ impl App {
     fn process_check_results(&mut self) {
         if let Some(ref rx) = self.check_rx {
             while let Ok((idx, status)) = rx.try_recv() {
+                let prev = self.check_results.get(&idx);
+                if let Some(CheckResult::Manual) = prev {
+                    self.check_manual -= 1;
+                }
                 match &status {
-                    CheckResult::Passed => self.check_passed += 1,
-                    CheckResult::Failed(_) => self.check_failed += 1,
-                    CheckResult::Manual => self.check_manual += 1,
+                    CheckResult::Passed | CheckResult::AgentPassed => self.check_passed += 1,
+                    CheckResult::Failed(_) | CheckResult::AgentFailed(_) => {
+                        self.check_failed += 1
+                    }
+                    CheckResult::Manual | CheckResult::AgentUnresolved => {
+                        self.check_manual += 1
+                    }
+                    CheckResult::AgentPending => {}
                 }
                 self.check_results.insert(idx, status);
             }
 
             let total = self.check_passed + self.check_failed + self.check_manual;
-            if total >= self.display_facts.len() {
+            let pending = self
+                .check_results
+                .values()
+                .filter(|r| matches!(r, CheckResult::AgentPending))
+                .count();
+            if total >= self.display_facts.len() && pending == 0 {
                 self.check_running = false;
                 self.check_rx = None;
                 self.check_cancel = None;
@@ -1140,7 +1235,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         fs::create_dir(dir.path().join(".git")).unwrap();
         fs::write(dir.path().join(".facts"), content).unwrap();
-        let app = App::new(dir.path().to_path_buf(), false).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), false).unwrap();
+        app.agent_disabled = true;
         (dir, app)
     }
 

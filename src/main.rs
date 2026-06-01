@@ -1,6 +1,8 @@
 mod add;
+mod agent;
 mod check;
 mod color;
+mod config;
 mod edit;
 mod fmt;
 mod get;
@@ -85,6 +87,10 @@ enum Command {
         /// Show markdown-like output with headings, bullets, and dimmed IDs.
         #[arg(long)]
         light: bool,
+
+        /// Include config facts (dot-prefixed IDs like .config) in output.
+        #[arg(long)]
+        all: bool,
     },
 
     /// Run all command-facts, report pass/fail/manual.
@@ -104,6 +110,14 @@ enum Command {
         /// Per-command timeout in seconds.
         #[arg(long)]
         timeout: Option<u64>,
+
+        /// Agent command template (e.g. "claude -p %p") or preset name (claude, codex, pi, droid, opencode, mi).
+        #[arg(long)]
+        agent: Option<String>,
+
+        /// Number of manual facts per agent batch (default: 10).
+        #[arg(long)]
+        batch_size: Option<usize>,
     },
 
     /// Append a fact to a file and section.
@@ -230,8 +244,39 @@ enum Command {
         action: Option<SkillsCommand>,
     },
 
+    /// Manage tool configuration (.config fact).
+    Config {
+        #[command(subcommand)]
+        action: ConfigCommand,
+    },
+
     /// Browse and manage facts interactively.
     Tui,
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// Get a config value by key.
+    Get {
+        /// The config key to look up.
+        key: String,
+    },
+    /// Set a config value (creates .config if needed).
+    Set {
+        /// The config key.
+        key: String,
+        /// The config value.
+        value: String,
+    },
+    /// Show all config key-value pairs.
+    Show,
+    /// Show all config key-value pairs (alias for show).
+    Ls,
+    /// Remove a config key.
+    Rm {
+        /// The config key to remove.
+        key: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -328,6 +373,7 @@ fn main() -> anyhow::Result<()> {
             search,
             depth,
             light,
+            all,
         }) => {
             let opts = list::ListOptions {
                 file_filter: file,
@@ -338,6 +384,7 @@ fn main() -> anyhow::Result<()> {
                 search_expr: search,
                 depth,
                 light,
+                all,
             };
             let had_output = list::run(&opts)?;
             if !had_output {
@@ -349,12 +396,16 @@ fn main() -> anyhow::Result<()> {
             search,
             depth,
             timeout,
+            agent,
+            batch_size,
         }) => {
             let opts = check::CheckOptions {
                 tags_expr: tags,
                 search_expr: search,
                 depth,
                 timeout,
+                agent,
+                batch_size: batch_size.unwrap_or(10),
             };
             let all_passed = check::run(&opts)?;
             if !all_passed {
@@ -462,6 +513,15 @@ fn main() -> anyhow::Result<()> {
             };
             skills::run(&action)?;
         }
+        Some(Command::Config { action }) => {
+            let action = match action {
+                ConfigCommand::Get { key } => config::ConfigAction::Get { key },
+                ConfigCommand::Set { key, value } => config::ConfigAction::Set { key, value },
+                ConfigCommand::Show | ConfigCommand::Ls => config::ConfigAction::Show,
+                ConfigCommand::Rm { key } => config::ConfigAction::Rm { key },
+            };
+            config::run(&action)?;
+        }
         Some(Command::Tui) => {
             tui::run()?;
         }
@@ -475,6 +535,7 @@ fn main() -> anyhow::Result<()> {
                 search_expr: None,
                 depth: None,
                 light: false,
+                all: false,
             };
             let had_output = list::run(&opts)?;
             if !had_output {

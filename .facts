@@ -66,10 +66,10 @@
 ### lifecycle
 - three well-known tags drive the agent workflow: @draft, @spec, @implemented
 - @draft — rough idea, needs refinement and atomization
-- @spec — precise and actionable, ready to implement
+- — precise and actionable, ready to implement @implemented
 - @implemented — true and backed by code
 - untagged facts are ground truth — verified against the codebase
-- the lifecycle is a pipeline: @draft → @spec → @implemented
+- the lifecycle is a pipeline: → → @draft @implemented
 - facts-discover classifies facts by checking them against the codebase
 - each agent skill owns one lifecycle transition
 
@@ -296,7 +296,7 @@
 - label: minimal dependencies (core 2 + TUI ratatui/crossterm + utils)
   id: swd
   command: test $(sed -n "/^\[dependencies\]/,/^\[/p" Cargo.toml | grep -c "^[a-z]") -le 6
-  tags: [spec]
+  tags: [implemented]
 - label: clap for CLI argument parsing
   command: grep -q '^clap' Cargo.toml
 - label: anyhow for error handling
@@ -379,8 +379,9 @@
   command: test -f skills/facts-discover/SKILL.md
 
 ### facts-implement
-- label: operates on @spec facts — implements them in code, then tags @implemented
+- label: operates on facts — implements them in code, then tags
   command: grep -q "@spec" skills/facts-implement/SKILL.md
+  tags: [implemented]
 - agent decides order and priority based on its understanding of the codebase
 - label: uses subagents to parallelize independent work
   command: grep -q "subagent\|parallel" skills/facts-implement/SKILL.md
@@ -394,8 +395,9 @@
   command: test -f skills/facts-implement/SKILL.md
 
 ### facts-refine
-- label: operates on @draft facts — refines them into precise @spec facts with the user
+- label: operates on facts — refines them into precise facts with the user
   command: grep -q "@draft" skills/facts-refine/SKILL.md && grep -q "@spec" skills/facts-refine/SKILL.md
+  tags: [draft, implemented]
 - interactive — proposes changes, user decides
 - every change discussed with user before applying
 - label: identifies vague, compound, contradictory, and gapped facts
@@ -558,6 +560,23 @@
 - manual facts footer in check output uses correct singular/plural grammar ('1 fact has' / 'N facts have') @implemented
 - manual facts footer wording is precise ('verify each against the code and state PASS or FAIL with a one-line reason') @implemented
 
+### agent
+- --agent flag accepts a shell command template with %p as the prompt placeholder, or a preset name @implemented
+- --agent presets: claude="claude -p %p", codex="codex exec %p", pi="pi -p %p", droid="droid exec %p", opencode="opencode run %p", mi="mi -p %p" @implemented
+- --agent operates only on manual facts remaining after --tags, --search, and other filters @implemented
+- manual facts are batched into a single agent invocation, default 10 facts per batch @implemented
+- --batch-size N overrides the default batch size of 10 for --agent invocations @implemented
+- %p is shell-escaped and includes: fact-verdict XML format instructions, the list of fact IDs with their labels and section paths, and instructions to verify each against the codebase @implemented
+- agent output is parsed for <fact-verdict id="ID">PASS</fact-verdict> and <fact-verdict id="ID">FAIL reason</fact-verdict> tags @implemented
+- parser strips ANSI escape codes and markdown fences before extracting fact-verdict tags @implemented
+- when a fact ID appears in multiple fact-verdict tags, last match wins @implemented
+- facts with no matching fact-verdict tag in agent output are reported as unresolved in the summary @implemented
+- agent process failure (non-zero exit or spawn error) means all facts in that batch are unresolved @implemented
+- summary line includes agent-verified counts: N passed, N failed, N unresolved (agent) @implemented
+- unresolved agent facts cause non-zero exit, same as command failures @implemented
+- when no --agent flag and no .config agent key, auto-detects by scanning PATH for preset binaries in order: claude, codex, pi, droid, opencode, mi @implemented
+- .config agent key overrides auto-detection, --agent flag overrides both @implemented
+
 ## skills
 - skills list shows all installed skills with name and description @implemented
 - skills show prints the full content of a skill by name @implemented
@@ -665,6 +684,20 @@
   id: y12
   tags: [implemented]
 
+### check
+- TUI check automatically sends manual facts to an agent using the same resolution: --agent flag > .config agent > PATH auto-detect @implemented
+- TUI shows a spinner on each manual fact while the agent batch is in flight, replacing the ? marker @implemented
+- TUI replaces spinner with PASS/FAIL result as each fact-verdict is parsed from agent output @implemented
+- if no agent is available (none in PATH, no .config), TUI check skips manual facts and shows ? as before @implemented
+
+## config
+- facts config subcommand manages the .config fact: get, set, show, ls, rm @implemented
+- facts config set <key> <value> creates or updates a key in .config @implemented
+- facts config get <key> prints a single config value @implemented
+- facts config show prints all config key-value pairs (alias: ls) @implemented
+- facts config rm <key> removes a key from .config @implemented
+- facts config set creates the .config fact in .facts if it does not exist @implemented
+
 # distribution
 
 ## npm
@@ -707,6 +740,15 @@
 - label: tag filter expressions using --tags match case-insensitively (for consistency with --search)
   command: grep -q "eq_ignore_ascii_case" src/tags.rs
   tags: [implemented]
+
+## config
+- a fact with explicit id ".config" is reserved as tool configuration, not a project truth claim @implemented
+- the .config fact label must be "facts configuration" @implemented
+- the .config fact allows arbitrary key-value pairs beyond the standard id/label/command/tags keys @implemented
+- dot-prefixed IDs (starting with .) are reserved for tool internals — only .config is defined @implemented
+- facts list excludes .config by default — shown only with --all @implemented
+- facts check skips the .config fact — it is not a verifiable claim @implemented
+- facts get .config shows all configuration key-value pairs @implemented
 
 # skills
 

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
+use crate::agent;
 use crate::color;
 use crate::id;
 use crate::lint;
@@ -20,6 +21,8 @@ pub struct CheckOptions {
     pub search_expr: Option<String>,
     pub depth: Option<usize>,
     pub timeout: Option<u64>,
+    pub agent: Option<String>,
+    pub batch_size: usize,
 }
 
 /// Result of running a single command-fact.
@@ -40,6 +43,11 @@ enum CheckStatus {
         stderr: String,
     },
     Manual,
+    AgentPassed,
+    AgentFailed {
+        reason: String,
+    },
+    AgentUnresolved,
 }
 
 /// Format the display path for a fact (file > section > label).
@@ -211,6 +219,40 @@ fn print_result(out: &mut impl Write, r: &CheckResult, id_width: usize, detail_i
                 tag_suffix,
             );
         }
+        CheckStatus::AgentPassed => {
+            let _ = writeln!(
+                out,
+                "  {} {} {}{}",
+                color::green(&format!("✓ {padded_id}")),
+                r.display_path,
+                color::dim("(agent)"),
+                tag_suffix,
+            );
+        }
+        CheckStatus::AgentFailed { reason } => {
+            let _ = writeln!(
+                out,
+                "  {} {}{}",
+                color::red(&format!("✗ {padded_id}")),
+                r.display_path,
+                tag_suffix,
+            );
+            let pad = " ".repeat(detail_indent);
+            let _ = writeln!(out, "{pad}{} agent", color::dim("source:"));
+            if !reason.is_empty() {
+                let _ = writeln!(out, "{pad}{} {reason}", color::dim("reason:"));
+            }
+        }
+        CheckStatus::AgentUnresolved => {
+            let _ = writeln!(
+                out,
+                "  {} {} {}{}",
+                color::yellow(&format!("? {padded_id}")),
+                r.display_path,
+                color::dim("(unresolved)"),
+                tag_suffix,
+            );
+        }
     }
     let _ = out.flush();
 }
@@ -287,6 +329,8 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
 
     let timeout = opts.timeout.map(Duration::from_secs);
     let mut results: Vec<CheckResult> = Vec::new();
+    let mut manual_facts: Vec<agent::ManualFact> = Vec::new();
+    let mut manual_indices: Vec<usize> = Vec::new();
     let mut fact_idx = 0;
 
     // Pre-compute ID width for consistent alignment.
@@ -300,6 +344,10 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
         for (section_path, fact) in sheet.all_facts() {
             let id = assigned_ids[fact_idx].clone();
             fact_idx += 1;
+
+            if fact.is_config() {
+                continue;
+            }
 
             if let Some(ref expr) = opts.tags_expr
                 && !matches_tag_expr(expr, &fact.tags)
@@ -347,7 +395,15 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
                         }
                     }
                 }
-                None => CheckStatus::Manual,
+                None => {
+                    manual_facts.push(agent::ManualFact {
+                        id: id.clone(),
+                        label: fact.label.clone(),
+                        section_path: section_path.join("/"),
+                    });
+                    manual_indices.push(results.len());
+                    CheckStatus::Manual
+                }
             };
 
             let result = CheckResult {
@@ -359,6 +415,31 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
 
             print_result(&mut out, &result, id_width, detail_indent);
             results.push(result);
+        }
+    }
+
+    // Agent verification of manual facts.
+    let agent_template = agent::resolve_agent(opts.agent.as_deref(), &root);
+    if let Some(ref template) = agent_template
+        && !manual_facts.is_empty()
+    {
+        for batch_start in (0..manual_facts.len()).step_by(opts.batch_size) {
+            let batch_end = (batch_start + opts.batch_size).min(manual_facts.len());
+            let batch = &manual_facts[batch_start..batch_end];
+            let batch_result = agent::run_batch(template, batch, &root);
+
+            for (i, (_, verdict)) in batch_result.verdicts.iter().enumerate() {
+                let result_idx = manual_indices[batch_start + i];
+                let status = match verdict {
+                    agent::AgentVerdict::Pass => CheckStatus::AgentPassed,
+                    agent::AgentVerdict::Fail(reason) => CheckStatus::AgentFailed {
+                        reason: reason.clone(),
+                    },
+                    agent::AgentVerdict::Unresolved => CheckStatus::AgentUnresolved,
+                };
+                results[result_idx].status = status;
+                print_result(&mut out, &results[result_idx], id_width, detail_indent);
+            }
         }
     }
 
@@ -376,17 +457,40 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
         .iter()
         .filter(|r| matches!(r.status, CheckStatus::Manual))
         .count();
+    let agent_passed = results
+        .iter()
+        .filter(|r| matches!(r.status, CheckStatus::AgentPassed))
+        .count();
+    let agent_failed = results
+        .iter()
+        .filter(|r| matches!(r.status, CheckStatus::AgentFailed { .. }))
+        .count();
+    let agent_unresolved = results
+        .iter()
+        .filter(|r| matches!(r.status, CheckStatus::AgentUnresolved))
+        .count();
 
-    let has_failures = failed > 0;
+    let has_failures = failed > 0 || agent_failed > 0 || agent_unresolved > 0;
 
     println!();
-    let summary = format!(
-        "{}, {}, {}",
+    let mut summary_parts = vec![
         color::green(&format!("{passed} passed")),
         color::red(&format!("{failed} failed")),
         color::yellow(&format!("{manual} manual")),
-    );
-    println!("{}", color::bold(&summary));
+    ];
+    println!("{}", color::bold(&summary_parts.join(", ")));
+
+    if agent_passed > 0 || agent_failed > 0 || agent_unresolved > 0 {
+        summary_parts = vec![
+            color::green(&format!("{agent_passed} passed")),
+            color::red(&format!("{agent_failed} failed")),
+            color::yellow(&format!("{agent_unresolved} unresolved")),
+        ];
+        println!(
+            "{}",
+            color::bold(&format!("{} (agent)", summary_parts.join(", ")))
+        );
+    }
 
     if manual > 0 {
         let noun = if manual == 1 {

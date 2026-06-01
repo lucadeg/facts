@@ -251,12 +251,17 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
 
             let status_cell = if let Some(result) = app.check_results.get(&fact.global_index) {
                 match result {
-                    CheckResult::Passed => Cell::from("✓").style(Style::default().fg(theme::PASS)),
-                    CheckResult::Failed(_) => {
+                    CheckResult::Passed | CheckResult::AgentPassed => {
+                        Cell::from("✓").style(Style::default().fg(theme::PASS))
+                    }
+                    CheckResult::Failed(_) | CheckResult::AgentFailed(_) => {
                         Cell::from("✗").style(Style::default().fg(theme::FAIL))
                     }
-                    CheckResult::Manual => {
+                    CheckResult::Manual | CheckResult::AgentUnresolved => {
                         Cell::from("?").style(Style::default().fg(theme::MANUAL))
+                    }
+                    CheckResult::AgentPending => {
+                        Cell::from("⟳").style(Style::default().fg(theme::ACCENT))
                     }
                 }
             } else if app.check_running {
@@ -807,7 +812,7 @@ fn draw_detail(frame: &mut Frame, app: &App, area: Rect) {
 
     let has_stderr = matches!(
         app.check_results.get(&fact.global_index),
-        Some(CheckResult::Failed(s)) if !s.is_empty()
+        Some(CheckResult::Failed(s) | CheckResult::AgentFailed(s)) if !s.is_empty()
     );
     let detail_area = if has_stderr {
         centered_rect(70, 65, area)
@@ -875,9 +880,16 @@ fn draw_detail(frame: &mut Frame, app: &App, area: Rect) {
 
     if let Some(result) = app.check_results.get(&fact.global_index) {
         let (icon, style) = match result {
-            CheckResult::Passed => ("✓ PASSED", Style::default().fg(theme::PASS)),
-            CheckResult::Failed(_) => ("✗ FAILED", Style::default().fg(theme::FAIL)),
-            CheckResult::Manual => ("? MANUAL", Style::default().fg(theme::MANUAL)),
+            CheckResult::Passed | CheckResult::AgentPassed => {
+                ("✓ PASSED", Style::default().fg(theme::PASS))
+            }
+            CheckResult::Failed(_) | CheckResult::AgentFailed(_) => {
+                ("✗ FAILED", Style::default().fg(theme::FAIL))
+            }
+            CheckResult::Manual | CheckResult::AgentUnresolved => {
+                ("? MANUAL", Style::default().fg(theme::MANUAL))
+            }
+            CheckResult::AgentPending => ("⟳ CHECKING…", Style::default().fg(theme::ACCENT)),
         };
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
@@ -886,7 +898,8 @@ fn draw_detail(frame: &mut Frame, app: &App, area: Rect) {
         ]));
     }
 
-    if let Some(CheckResult::Failed(stderr)) = app.check_results.get(&fact.global_index)
+    if let Some(CheckResult::Failed(stderr) | CheckResult::AgentFailed(stderr)) =
+        app.check_results.get(&fact.global_index)
         && !stderr.is_empty()
     {
         lines.push(Line::from(""));

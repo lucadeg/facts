@@ -1,0 +1,454 @@
+/// Agent verification for manual facts.
+///
+/// Supports sending manual facts to an AI agent for verification.
+/// The agent receives a prompt with fact IDs and labels, and returns
+/// verdicts in XML format: `<fact-verdict id="ID">PASS</fact-verdict>`
+/// or `<fact-verdict id="ID">FAIL reason</fact-verdict>`.
+use std::path::Path;
+use std::process::Command;
+
+/// A preset agent command template.
+struct Preset {
+    name: &'static str,
+    template: &'static str,
+}
+
+const PRESETS: &[Preset] = &[
+    Preset {
+        name: "claude",
+        template: "claude -p %p",
+    },
+    Preset {
+        name: "codex",
+        template: "codex exec %p",
+    },
+    Preset {
+        name: "pi",
+        template: "pi -p %p",
+    },
+    Preset {
+        name: "droid",
+        template: "droid exec %p",
+    },
+    Preset {
+        name: "opencode",
+        template: "opencode run %p",
+    },
+    Preset {
+        name: "mi",
+        template: "mi -p %p",
+    },
+];
+
+/// A manual fact to be verified by an agent.
+pub struct ManualFact {
+    pub id: String,
+    pub label: String,
+    pub section_path: String,
+}
+
+/// Result of agent verification for a single fact.
+#[derive(Debug, Clone)]
+pub enum AgentVerdict {
+    Pass,
+    Fail(String),
+    Unresolved,
+}
+
+/// Result of running an agent batch.
+pub struct AgentBatchResult {
+    pub verdicts: Vec<(String, AgentVerdict)>,
+}
+
+/// Resolve which agent command to use.
+/// Priority: explicit --agent flag > .config agent key > PATH auto-detect.
+pub fn resolve_agent(
+    flag: Option<&str>,
+    project_root: &Path,
+) -> Option<String> {
+    if let Some(agent) = flag {
+        let template = resolve_preset_or_literal(agent);
+        return Some(template);
+    }
+
+    if let Some(config_val) = crate::config::read_config_value(project_root, "agent") {
+        let template = resolve_preset_or_literal(&config_val);
+        return Some(template);
+    }
+
+    auto_detect_agent()
+}
+
+fn resolve_preset_or_literal(agent: &str) -> String {
+    for preset in PRESETS {
+        if preset.name == agent {
+            return preset.template.to_string();
+        }
+    }
+    agent.to_string()
+}
+
+fn auto_detect_agent() -> Option<String> {
+    for preset in PRESETS {
+        if which_exists(preset.name) {
+            return Some(preset.template.to_string());
+        }
+    }
+    None
+}
+
+fn which_exists(name: &str) -> bool {
+    Command::new("which")
+        .arg(name)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Build the prompt for an agent batch.
+fn build_prompt(facts: &[ManualFact]) -> String {
+    let mut lines = vec![
+        "You are verifying facts about a codebase. For each fact below, check whether it is true by examining the code and project state.".to_string(),
+        String::new(),
+        "Respond with one XML tag per fact:".to_string(),
+        "- If the fact is true: <fact-verdict id=\"ID\">PASS</fact-verdict>".to_string(),
+        "- If the fact is false: <fact-verdict id=\"ID\">FAIL reason</fact-verdict>".to_string(),
+        String::new(),
+        "Facts to verify:".to_string(),
+        String::new(),
+    ];
+
+    for fact in facts {
+        let path = if fact.section_path.is_empty() {
+            fact.label.clone()
+        } else {
+            format!("{} > {}", fact.section_path, fact.label)
+        };
+        lines.push(format!("- [{}] {}", fact.id, path));
+    }
+
+    lines.join("\n")
+}
+
+/// Shell-escape a string for use in a command.
+fn shell_escape(s: &str) -> String {
+    let mut escaped = String::with_capacity(s.len() + 2);
+    escaped.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            escaped.push_str("'\\''");
+        } else {
+            escaped.push(ch);
+        }
+    }
+    escaped.push('\'');
+    escaped
+}
+
+/// Run an agent batch and return verdicts.
+pub fn run_batch(
+    template: &str,
+    facts: &[ManualFact],
+    project_root: &Path,
+) -> AgentBatchResult {
+    let prompt = build_prompt(facts);
+    let escaped = shell_escape(&prompt);
+    let command = template.replace("%p", &escaped);
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
+
+    let output = Command::new(&shell)
+        .arg("-c")
+        .arg(&command)
+        .current_dir(project_root)
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let combined = format!("{stdout}{stderr}");
+            parse_verdicts(&combined, facts)
+        }
+        _ => {
+            let verdicts = facts
+                .iter()
+                .map(|f| (f.id.clone(), AgentVerdict::Unresolved))
+                .collect();
+            AgentBatchResult { verdicts }
+        }
+    }
+}
+
+/// Parse agent output for fact-verdict tags.
+fn parse_verdicts(output: &str, facts: &[ManualFact]) -> AgentBatchResult {
+    let cleaned = strip_ansi_and_fences(output);
+    let mut verdict_map: std::collections::HashMap<String, AgentVerdict> =
+        std::collections::HashMap::new();
+
+    for cap in find_fact_verdicts(&cleaned) {
+        verdict_map.insert(cap.id, cap.verdict);
+    }
+
+    let verdicts = facts
+        .iter()
+        .map(|f| {
+            let verdict = verdict_map
+                .remove(&f.id)
+                .unwrap_or(AgentVerdict::Unresolved);
+            (f.id.clone(), verdict)
+        })
+        .collect();
+
+    AgentBatchResult { verdicts }
+}
+
+struct ParsedVerdict {
+    id: String,
+    verdict: AgentVerdict,
+}
+
+fn find_fact_verdicts(text: &str) -> Vec<ParsedVerdict> {
+    let mut results = Vec::new();
+    let open_tag = "<fact-verdict";
+    let close_tag = "</fact-verdict>";
+
+    let mut search_from = 0;
+    while let Some(start) = text[search_from..].find(open_tag) {
+        let abs_start = search_from + start;
+        let after_tag = abs_start + open_tag.len();
+
+        let Some(gt_pos) = text[after_tag..].find('>') else {
+            break;
+        };
+        let attrs = &text[after_tag..after_tag + gt_pos];
+        let content_start = after_tag + gt_pos + 1;
+
+        let Some(end) = text[content_start..].find(close_tag) else {
+            break;
+        };
+        let content = text[content_start..content_start + end].trim();
+
+        if let Some(id) = extract_id_attr(attrs) {
+            let verdict = if content.eq_ignore_ascii_case("pass") {
+                AgentVerdict::Pass
+            } else if let Some(reason) = content
+                .strip_prefix("FAIL")
+                .or_else(|| content.strip_prefix("fail"))
+                .or_else(|| content.strip_prefix("Fail"))
+            {
+                AgentVerdict::Fail(reason.trim().to_string())
+            } else {
+                AgentVerdict::Fail(content.to_string())
+            };
+            results.push(ParsedVerdict { id, verdict });
+        }
+
+        search_from = content_start + end + close_tag.len();
+    }
+
+    results
+}
+
+fn extract_id_attr(attrs: &str) -> Option<String> {
+    let id_prefix = "id=\"";
+    if let Some(start) = attrs.find(id_prefix) {
+        let val_start = start + id_prefix.len();
+        if let Some(end) = attrs[val_start..].find('"') {
+            return Some(attrs[val_start..val_start + end].to_string());
+        }
+    }
+    let id_prefix_single = "id='";
+    if let Some(start) = attrs.find(id_prefix_single) {
+        let val_start = start + id_prefix_single.len();
+        if let Some(end) = attrs[val_start..].find('\'') {
+            return Some(attrs[val_start..val_start + end].to_string());
+        }
+    }
+    None
+}
+
+/// Strip ANSI escape codes and markdown fences from text.
+fn strip_ansi_and_fences(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            while let Some(&c) = chars.peek() {
+                chars.next();
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            continue;
+        }
+        result.push(ch);
+    }
+
+    let mut final_result = String::new();
+    for line in result.lines() {
+        if line.trim().starts_with("```") {
+            continue;
+        }
+        final_result.push_str(line);
+        final_result.push('\n');
+    }
+
+    final_result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_preset() {
+        assert_eq!(resolve_preset_or_literal("claude"), "claude -p %p");
+        assert_eq!(resolve_preset_or_literal("codex"), "codex exec %p");
+        assert_eq!(
+            resolve_preset_or_literal("custom cmd %p"),
+            "custom cmd %p"
+        );
+    }
+
+    #[test]
+    fn test_shell_escape() {
+        assert_eq!(shell_escape("hello"), "'hello'");
+        assert_eq!(shell_escape("it's"), "'it'\\''s'");
+        assert_eq!(shell_escape("a b c"), "'a b c'");
+    }
+
+    #[test]
+    fn test_parse_verdicts_pass() {
+        let output = r#"<fact-verdict id="abc">PASS</fact-verdict>"#;
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+    }
+
+    #[test]
+    fn test_parse_verdicts_fail() {
+        let output = r#"<fact-verdict id="abc">FAIL not implemented yet</fact-verdict>"#;
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Fail(ref r) if r == "not implemented yet"));
+    }
+
+    #[test]
+    fn test_parse_verdicts_unresolved() {
+        let output = "no verdict tags here";
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Unresolved));
+    }
+
+    #[test]
+    fn test_parse_verdicts_last_wins() {
+        let output = r#"
+<fact-verdict id="abc">FAIL first</fact-verdict>
+<fact-verdict id="abc">PASS</fact-verdict>
+"#;
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+    }
+
+    #[test]
+    fn test_strip_ansi_codes() {
+        let input = "\x1b[32mgreen\x1b[0m normal";
+        let result = strip_ansi_and_fences(input);
+        assert_eq!(result.trim(), "green normal");
+    }
+
+    #[test]
+    fn test_strip_markdown_fences() {
+        let input = "```xml\n<fact-verdict id=\"x\">PASS</fact-verdict>\n```\n";
+        let result = strip_ansi_and_fences(input);
+        assert!(result.contains("<fact-verdict"));
+        assert!(!result.contains("```"));
+    }
+
+    #[test]
+    fn test_build_prompt_includes_facts() {
+        let facts = vec![
+            ManualFact {
+                id: "abc".to_string(),
+                label: "some fact".to_string(),
+                section_path: "cli/check".to_string(),
+            },
+            ManualFact {
+                id: "def".to_string(),
+                label: "another fact".to_string(),
+                section_path: String::new(),
+            },
+        ];
+        let prompt = build_prompt(&facts);
+        assert!(prompt.contains("[abc]"));
+        assert!(prompt.contains("cli/check > some fact"));
+        assert!(prompt.contains("[def]"));
+        assert!(prompt.contains("another fact"));
+        assert!(prompt.contains("fact-verdict"));
+    }
+
+    #[test]
+    fn test_multiple_facts_in_output() {
+        let output = r#"
+<fact-verdict id="a1">PASS</fact-verdict>
+<fact-verdict id="b2">FAIL missing feature</fact-verdict>
+<fact-verdict id="c3">PASS</fact-verdict>
+"#;
+        let facts = vec![
+            ManualFact {
+                id: "a1".to_string(),
+                label: "one".to_string(),
+                section_path: String::new(),
+            },
+            ManualFact {
+                id: "b2".to_string(),
+                label: "two".to_string(),
+                section_path: String::new(),
+            },
+            ManualFact {
+                id: "c3".to_string(),
+                label: "three".to_string(),
+                section_path: String::new(),
+            },
+        ];
+        let result = parse_verdicts(output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+        assert!(matches!(result.verdicts[1].1, AgentVerdict::Fail(ref r) if r == "missing feature"));
+        assert!(matches!(result.verdicts[2].1, AgentVerdict::Pass));
+    }
+
+    #[test]
+    fn test_ansi_around_verdicts() {
+        let output = "\x1b[1m\x1b[32m<fact-verdict id=\"x\">\x1b[0mPASS\x1b[32m</fact-verdict>\x1b[0m";
+        let facts = vec![ManualFact {
+            id: "x".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+    }
+}

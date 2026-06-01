@@ -376,6 +376,21 @@ fn check_cross_file_duplicate_ids(
     Ok(())
 }
 
+/// Check if a fact group has a dot-prefixed explicit ID (config fact).
+fn has_dot_prefixed_id(group: &FactLineGroup) -> bool {
+    for line in &group.lines {
+        let trimmed = line.trim();
+        let stripped = parser::strip_fact_prefix(trimmed);
+        if let Some(val) = stripped.strip_prefix("id: ") {
+            let val = parser::strip_yaml_quotes(val.trim());
+            if val.starts_with('.') {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Check for invalid mapping keys.
 fn check_invalid_keys(content: &str, filename: &str, diagnostics: &mut Vec<LintDiagnostic>) {
     let lines: Vec<&str> = content.lines().collect();
@@ -383,6 +398,10 @@ fn check_invalid_keys(content: &str, filename: &str, diagnostics: &mut Vec<LintD
     let known_keys = ["label", "command", "id", "tags"];
 
     for group in fact_groups {
+        if has_dot_prefixed_id(&group) {
+            continue;
+        }
+
         if group.lines.len() < 2 {
             let line = group.lines[0];
             let content_part = parser::strip_fact_prefix(line);
@@ -495,6 +514,10 @@ fn check_unknown_continuation_lines(
 
     for group in fact_groups {
         if group.lines.len() < 2 {
+            continue;
+        }
+
+        if has_dot_prefixed_id(&group) {
             continue;
         }
 

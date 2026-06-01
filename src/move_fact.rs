@@ -89,6 +89,7 @@ pub fn run_in(opts: &MoveOptions, root: &Path) -> Result<()> {
         is_plain: source_fact.is_plain,
         raw: String::new(),
         blank_lines_before: 0,
+        extra: source_fact.extra.clone(),
     };
     moved_fact.raw = writer::fact_to_raw(&moved_fact);
 

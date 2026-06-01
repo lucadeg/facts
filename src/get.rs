@@ -101,6 +101,11 @@ pub fn run_in(target_id: &str, root: &Path) -> Result<()> {
         println!("tags: [{tag_list}]");
     }
 
+    // Print extra key-value pairs (for config facts)
+    for (key, val) in &fact.extra {
+        println!("{key}: {val}");
+    }
+
     Ok(())
 }
 

@@ -44,6 +44,14 @@ pub struct Fact {
     pub raw: String,
     /// Blank lines before this fact.
     pub blank_lines_before: usize,
+    /// Extra key-value pairs (for dot-prefixed config facts like .config).
+    pub extra: Vec<(String, String)>,
+}
+
+impl Fact {
+    pub fn is_config(&self) -> bool {
+        self.explicit_id.as_deref().is_some_and(|id| id.starts_with('.'))
+    }
 }
 
 impl FactSheet {

@@ -212,6 +212,7 @@ fn parse_single_fact(lines: &[String], blank_lines_before: usize) -> Result<Fact
             is_plain: true,
             raw,
             blank_lines_before,
+            extra: Vec::new(),
         });
     }
 
@@ -237,6 +238,8 @@ fn parse_mapping_fact(lines: &[String], blank_lines_before: usize) -> Result<Fac
     let mut command: Option<String> = None;
     let mut explicit_id: Option<String> = None;
     let mut mapping_tags: Vec<String> = Vec::new();
+    let mut extra: Vec<(String, String)> = Vec::new();
+    let mut unknown_keys: Vec<String> = Vec::new();
 
     let first_line = strip_fact_prefix(&lines[0]);
 
@@ -275,12 +278,20 @@ fn parse_mapping_fact(lines: &[String], blank_lines_before: usize) -> Result<Fac
             if !key.contains(' ') {
                 let known = ["label", "command", "id", "tags"];
                 if !known.contains(&key) {
-                    bail!(
-                        "unknown key '{key}' in fact mapping (allowed: id, label, command, tags)"
-                    );
+                    let val = strip_yaml_quotes(kv_line[colon_pos + 2..].trim());
+                    extra.push((key.to_string(), val.to_string()));
+                    unknown_keys.push(key.to_string());
                 }
             }
         }
+    }
+
+    let is_dot_prefixed = explicit_id.as_deref().is_some_and(|id| id.starts_with('.'));
+    if !is_dot_prefixed && !unknown_keys.is_empty() {
+        bail!(
+            "unknown key '{}' in fact mapping (allowed: id, label, command, tags)",
+            unknown_keys[0]
+        );
     }
 
     let label = label.context("mapping fact missing required 'label' key")?;
@@ -296,6 +307,7 @@ fn parse_mapping_fact(lines: &[String], blank_lines_before: usize) -> Result<Fac
         is_plain: false,
         raw,
         blank_lines_before,
+        extra,
     })
 }
 
