@@ -170,7 +170,9 @@
 - passed facts show the command inline
 - failed facts show command, exit code, and stderr
 - manual facts are listed without detail
-- summary line: N passed, N failed, N manual
+- label: summary shows unified totals (command + agent combined) with optional breakdown
+  command: grep -q 'total_passed' src/check.rs && grep -q 'total_failed' src/check.rs && grep -q 'breakdown_parts' src/check.rs
+  tags: [implemented]
 - label: when manual facts exist, the footer tells the agent to verify each one
   command: grep -q "verify each against the code" src/check.rs
 - exit 0 if all command-facts pass, non-zero if any fail
@@ -178,6 +180,12 @@
   command: facts check --help 2>&1 | grep -q '\-\-tags'
 - label: --timeout flag sets a per-command timeout
   command: facts check --help 2>&1 | grep -q '\-\-timeout'
+- label: --quiet flag (-q) suppresses all output, exit code only
+  command: facts check --help 2>&1 | grep -q '\-\-quiet' && grep -q 'quiet' src/check.rs
+  tags: [implemented]
+- label: --verbose flag (-v) shows agent prompts and raw output
+  command: facts check --help 2>&1 | grep -q '\-\-verbose' && grep -q 'verbose' src/check.rs
+  tags: [implemented]
 - label: filter expressions support and, or, not, and parentheses
   command: grep -q "and\|or\|not\|parse_expr" src/tags.rs
 

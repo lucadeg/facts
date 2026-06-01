@@ -122,6 +122,14 @@ enum Command {
         /// Number of manual facts per agent batch (default: 10).
         #[arg(long)]
         batch_size: Option<usize>,
+
+        /// Suppress all output except the exit code.
+        #[arg(long, short)]
+        quiet: bool,
+
+        /// Show extra detail: agent prompts and raw output.
+        #[arg(long, short)]
+        verbose: bool,
     },
 
     /// Append a fact to a file and section.
@@ -403,6 +411,8 @@ fn main() -> anyhow::Result<()> {
             agent,
             no_agent,
             batch_size,
+            quiet,
+            verbose,
         }) => {
             let opts = check::CheckOptions {
                 tags_expr: tags,
@@ -412,6 +422,8 @@ fn main() -> anyhow::Result<()> {
                 agent,
                 no_agent,
                 batch_size,
+                quiet,
+                verbose,
             };
             let all_passed = check::run(&opts)?;
             if !all_passed {

@@ -5424,7 +5424,7 @@ fn check_agent_mixed_command_and_manual() {
         .args(["check", "--agent", &template])
         .assert()
         .success()
-        .stdout(predicate::str::contains("1 passed"))
+        .stdout(predicate::str::contains("2 passed"))
         .stdout(predicate::str::contains("(agent)"));
 }
 
@@ -5440,7 +5440,7 @@ fn check_agent_only_runs_on_manual_facts() {
         .assert()
         .success()
         .stdout(predicate::str::contains("2 passed"))
-        .stdout(predicate::str::contains("0 manual"));
+        .stdout(predicate::str::contains("0 failed"));
 }
 
 #[test]
@@ -5745,7 +5745,7 @@ fn check_agent_empty_batch_no_invocation() {
         .assert()
         .success()
         .stdout(predicate::str::contains("1 passed"))
-        .stdout(predicate::str::contains("0 manual"));
+        .stdout(predicate::str::contains("0 failed"));
 }
 
 #[test]
@@ -5854,5 +5854,206 @@ fn check_prompt_includes_fact_count() {
     assert!(
         output.status.code() != Some(0),
         "check should fail with unresolved facts"
+    );
+}
+
+// --quiet flag
+
+#[test]
+fn check_quiet_suppresses_output() {
+    let dir = project("- label: passes\n  command: \"true\"\n- manual fact\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--quiet", "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Quiet mode should produce no output at all.
+    assert!(
+        stdout.is_empty(),
+        "expected no output in quiet mode, got: {stdout}"
+    );
+}
+
+#[test]
+fn check_quiet_exits_zero_on_pass() {
+    let dir = project("- label: passes\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--quiet"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_quiet_exits_nonzero_on_failure() {
+    let dir = project("- label: fails\n  command: \"false\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--quiet"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_quiet_with_agent() {
+    let dir = project("- manual fact\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--quiet", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.is_empty(),
+        "expected no output in quiet mode with agent, got: {stdout}"
+    );
+    assert!(
+        output.status.success(),
+        "should exit 0 when agent passes all"
+    );
+}
+
+#[test]
+fn check_quiet_short_flag() {
+    // -q should work as a short flag for --quiet.
+    let dir = project("- label: passes\n  command: \"true\"\n");
+    let output = facts_cmd(&dir).args(["check", "-q"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.is_empty(),
+        "expected no output with -q flag, got: {stdout}"
+    );
+    assert!(output.status.success());
+}
+
+// --verbose flag
+
+#[test]
+fn check_verbose_shows_agent_details() {
+    let dir = project("- manual fact\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--verbose", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Verbose mode should show the prompt and output sections.
+    assert!(
+        stdout.contains("batch 1 prompt"),
+        "expected prompt section in verbose output: {stdout}"
+    );
+    assert!(
+        stdout.contains("batch 1 output"),
+        "expected output section in verbose output: {stdout}"
+    );
+}
+
+#[test]
+fn check_verbose_shows_prompt_content() {
+    let dir = project("- manual fact\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--verbose", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Verbose should include the actual prompt text sent to the agent.
+    assert!(
+        stdout.contains("Facts to verify"),
+        "expected prompt facts in verbose output: {stdout}"
+    );
+    assert!(
+        stdout.contains("fact-verdict"),
+        "expected verdict instructions in verbose output: {stdout}"
+    );
+}
+
+#[test]
+fn check_verbose_short_flag() {
+    // -v should work as a short flag for --verbose.
+    let dir = project("- manual fact\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "-v", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("batch 1 prompt"),
+        "expected verbose output with -v flag: {stdout}"
+    );
+}
+
+#[test]
+fn check_verbose_without_agent_is_normal() {
+    // Verbose without agent should just show normal output (no crash).
+    let dir = project("- label: passes\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--verbose", "--no-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 passed"));
+}
+
+// Unified summary tests
+
+#[test]
+fn check_summary_unified_total() {
+    // With agent, the summary should show combined totals.
+    let dir = project("- label: cmd fact\n  command: \"true\"\n- manual fact\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Unified: 1 command + 1 agent = 2 passed total.
+    assert!(
+        stdout.contains("2 passed"),
+        "expected unified total '2 passed' in summary: {stdout}"
+    );
+    // Should also show the breakdown.
+    assert!(
+        stdout.contains("1 command") && stdout.contains("1 agent"),
+        "expected breakdown 'passed: 1 command, 1 agent' in summary: {stdout}"
+    );
+}
+
+#[test]
+fn check_summary_no_breakdown_without_agent() {
+    // Without agent, no breakdown line should appear.
+    let dir = project("- label: passes\n  command: \"true\"\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("1 passed"),
+        "expected '1 passed' in summary: {stdout}"
+    );
+    assert!(
+        !stdout.contains("command, "),
+        "expected no breakdown line without agent: {stdout}"
+    );
+}
+
+#[test]
+fn check_summary_shows_unresolved_separately() {
+    // Unresolved facts should appear in the summary line.
+    let dir = project("- manual fact\n");
+    let script = silent_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("1 unresolved"),
+        "expected '1 unresolved' in summary: {stdout}"
     );
 }

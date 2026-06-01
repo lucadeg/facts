@@ -60,6 +60,10 @@ pub struct AgentBatchResult {
     pub verdicts: Vec<(String, AgentVerdict)>,
     /// If the agent process itself failed, contains a description of what went wrong.
     pub error: Option<String>,
+    /// Raw agent output (stdout + stderr combined), available for verbose display.
+    pub raw_output: Option<String>,
+    /// The prompt that was sent to the agent.
+    pub prompt: String,
 }
 
 /// A resolved agent with its command template and display name.
@@ -185,7 +189,10 @@ pub fn run_batch(
     match result {
         Ok((stdout, stderr)) => {
             let combined = format!("{stdout}{stderr}");
-            parse_verdicts(&combined, facts)
+            let mut batch_result = parse_verdicts(&combined, facts);
+            batch_result.raw_output = Some(combined);
+            batch_result.prompt = prompt;
+            batch_result
         }
         Err(error_msg) => {
             let verdicts = facts
@@ -195,6 +202,8 @@ pub fn run_batch(
             AgentBatchResult {
                 verdicts,
                 error: Some(error_msg),
+                raw_output: None,
+                prompt,
             }
         }
     }
@@ -305,6 +314,8 @@ fn parse_verdicts(output: &str, facts: &[ManualFact]) -> AgentBatchResult {
     AgentBatchResult {
         verdicts,
         error: None,
+        raw_output: None,
+        prompt: String::new(),
     }
 }
 

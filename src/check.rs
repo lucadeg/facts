@@ -24,6 +24,8 @@ pub struct CheckOptions {
     pub agent: Option<String>,
     pub no_agent: bool,
     pub batch_size: Option<usize>,
+    pub quiet: bool,
+    pub verbose: bool,
 }
 
 const DEFAULT_BATCH_SIZE: usize = 10;
@@ -347,6 +349,8 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
     let id_width = assigned_ids.iter().map(|id| id.len()).max().unwrap_or(3);
     let detail_indent = id_width + 6;
 
+    let quiet = opts.quiet;
+    let verbose = opts.verbose;
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
 
@@ -384,13 +388,13 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
 
             let status = match &fact.command {
                 Some(command) => {
-                    if is_tty {
+                    if is_tty && !quiet {
                         let padded_id = format!("{:width$}", id, width = id_width);
                         let _ = write!(out, "  {}", color::dim(&format!("… {padded_id}")));
                         let _ = out.flush();
                     }
                     let (exit_code, stderr) = run_command(command, &root, timeout);
-                    if is_tty {
+                    if is_tty && !quiet {
                         let _ = write!(out, "\r\x1b[2K");
                     }
                     if exit_code == 0 {
@@ -423,7 +427,9 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
                 status,
             };
 
-            print_result(&mut out, &result, id_width, detail_indent);
+            if !quiet {
+                print_result(&mut out, &result, id_width, detail_indent);
+            }
             results.push(result);
         }
     }
@@ -439,18 +445,20 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
         && !manual_facts.is_empty()
     {
         let total_batches = manual_facts.len().div_ceil(batch_size);
-        let _ = writeln!(
-            out,
-            "\n{}",
-            color::dim(&format!(
-                "Verifying {} manual facts with {} ({} batch{})...",
-                manual_facts.len(),
-                agent.name,
-                total_batches,
-                if total_batches == 1 { "" } else { "es" },
-            )),
-        );
-        let _ = out.flush();
+        if !quiet {
+            let _ = writeln!(
+                out,
+                "\n{}",
+                color::dim(&format!(
+                    "Verifying {} manual facts with {} ({} batch{})...",
+                    manual_facts.len(),
+                    agent.name,
+                    total_batches,
+                    if total_batches == 1 { "" } else { "es" },
+                )),
+            );
+            let _ = out.flush();
+        }
 
         let is_tty = color::enabled();
         let agent_timeout = timeout;
@@ -459,7 +467,7 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
             let batch = &manual_facts[batch_start..batch_end];
             let batch_num = batch_start / batch_size + 1;
 
-            if is_tty {
+            if is_tty && !quiet {
                 let _ = write!(
                     out,
                     "  {}",
@@ -470,12 +478,35 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
 
             let batch_result = agent::run_batch(&agent.template, batch, &root, agent_timeout);
 
-            if is_tty {
+            if is_tty && !quiet {
                 let _ = write!(out, "\r\x1b[2K");
             }
 
+            // Verbose: show the prompt and raw agent output.
+            if verbose && !quiet {
+                let _ = writeln!(
+                    out,
+                    "\n{}",
+                    color::dim(&format!("--- batch {batch_num} prompt ---"))
+                );
+                for line in batch_result.prompt.lines() {
+                    let _ = writeln!(out, "  {}", color::dim(line));
+                }
+                if let Some(ref raw) = batch_result.raw_output {
+                    let _ = writeln!(
+                        out,
+                        "{}",
+                        color::dim(&format!("--- batch {batch_num} output ---"))
+                    );
+                    for line in raw.lines() {
+                        let _ = writeln!(out, "  {}", color::dim(line));
+                    }
+                    let _ = writeln!(out, "{}", color::dim("---"));
+                }
+            }
+
             // If the agent process itself failed, show the error once for the batch.
-            if let Some(ref err) = batch_result.error {
+            if !quiet && let Some(ref err) = batch_result.error {
                 let _ = writeln!(
                     out,
                     "  {}",
@@ -493,7 +524,9 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
                     agent::AgentVerdict::Unresolved => CheckStatus::AgentUnresolved,
                 };
                 results[result_idx].status = status;
-                print_result(&mut out, &results[result_idx], id_width, detail_indent);
+                if !quiet {
+                    print_result(&mut out, &results[result_idx], id_width, detail_indent);
+                }
             }
         }
     }
@@ -527,38 +560,58 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
 
     let has_failures = failed > 0 || agent_failed > 0 || agent_unresolved > 0;
 
-    println!();
-    let mut summary_parts = vec![
-        color::green(&format!("{passed} passed")),
-        color::red(&format!("{failed} failed")),
-        color::yellow(&format!("{manual} manual")),
-    ];
-    println!("{}", color::bold(&summary_parts.join(", ")));
+    if !quiet {
+        let total_passed = passed + agent_passed;
+        let total_failed = failed + agent_failed;
 
-    if agent_passed > 0 || agent_failed > 0 || agent_unresolved > 0 {
-        summary_parts = vec![
-            color::green(&format!("{agent_passed} passed")),
-            color::red(&format!("{agent_failed} failed")),
-            color::yellow(&format!("{agent_unresolved} unresolved")),
+        println!();
+
+        // Unified summary line: total passed, total failed, manual/unresolved.
+        let mut summary_parts = vec![
+            color::green(&format!("{total_passed} passed")),
+            color::red(&format!("{total_failed} failed")),
         ];
-        println!(
-            "{}",
-            color::bold(&format!("{} (agent)", summary_parts.join(", ")))
-        );
-    }
 
-    if manual > 0 {
-        let noun = if manual == 1 {
-            "fact has"
-        } else {
-            "facts have"
-        };
-        println!(
-            "{}",
-            color::yellow(&format!(
-                "{manual} {noun} no command — verify each against the code and state PASS or FAIL with a one-line reason."
-            )),
-        );
+        if manual > 0 {
+            summary_parts.push(color::yellow(&format!("{manual} manual")));
+        }
+
+        if agent_unresolved > 0 {
+            summary_parts.push(color::yellow(&format!("{agent_unresolved} unresolved")));
+        }
+
+        println!("{}", color::bold(&summary_parts.join(", ")));
+
+        // Breakdown line when agent was used: show command vs agent split.
+        let agent_total = agent_passed + agent_failed + agent_unresolved;
+        if agent_total > 0 {
+            let breakdown_parts = [format!("{passed} command"), format!("{agent_passed} agent")];
+            println!(
+                "{}",
+                color::dim(&format!("  passed: {}", breakdown_parts.join(", ")))
+            );
+            if total_failed > 0 {
+                let fail_parts = [format!("{failed} command"), format!("{agent_failed} agent")];
+                println!(
+                    "{}",
+                    color::dim(&format!("  failed: {}", fail_parts.join(", ")))
+                );
+            }
+        }
+
+        if manual > 0 {
+            let noun = if manual == 1 {
+                "fact has"
+            } else {
+                "facts have"
+            };
+            println!(
+                "{}",
+                color::yellow(&format!(
+                    "{manual} {noun} no command — verify each against the code and state PASS or FAIL with a one-line reason."
+                )),
+            );
+        }
     }
 
     Ok(!has_failures)
