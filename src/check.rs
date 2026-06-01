@@ -281,11 +281,15 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
     }
 
     // Resolve batch size: CLI flag > .config batch-size > default.
-    let batch_size = opts.batch_size.unwrap_or_else(|| {
-        crate::config::read_config_value(&root, "batch-size")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_BATCH_SIZE)
-    });
+    // Clamp to at least 1 to prevent division-by-zero and infinite loops.
+    let batch_size = opts
+        .batch_size
+        .unwrap_or_else(|| {
+            crate::config::read_config_value(&root, "batch-size")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_BATCH_SIZE)
+        })
+        .max(1);
 
     // Lint all files first — fail early on structural errors.
     let mut lint_errors = false;

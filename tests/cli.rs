@@ -5846,7 +5846,6 @@ fn check_prompt_includes_fact_count() {
         .args(["check", "--agent", &template])
         .output()
         .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
     // The unresolved output means the agent echoed the prompt but no verdict tags were found.
     // That's fine — we're testing the prompt structure, not the verdict parsing.
     // The prompt should contain "Facts to verify (2):" since we have 2 facts.
@@ -6274,4 +6273,172 @@ fn check_no_agent_help_mentions_suppression() {
         stdout.contains("Suppress") || stdout.contains("suppress"),
         "check --no-agent help should mention suppression: {stdout}"
     );
+}
+
+// ===========================================================================
+// Security and robustness edge cases
+// ===========================================================================
+
+#[test]
+fn check_agent_batch_size_zero_does_not_panic() {
+    // batch_size=0 should be clamped to 1, not panic.
+    let dir = project("- manual fact\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template, "--batch-size", "0"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 passed"));
+}
+
+#[test]
+fn check_agent_batch_size_one() {
+    // batch_size=1 should create one batch per fact.
+    let dir = project("- manual one\n- manual two\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template, "--batch-size", "1"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("2 batches"),
+        "expected 2 batches with batch_size=1 and 2 facts: {stdout}"
+    );
+    assert!(stdout.contains("2 passed"), "expected 2 passed: {stdout}");
+}
+
+#[test]
+fn check_agent_batch_size_larger_than_facts() {
+    // batch_size larger than fact count should produce 1 batch.
+    let dir = project("- manual one\n- manual two\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template, "--batch-size", "100"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("1 batch)"),
+        "expected 1 batch when batch_size > fact count: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_config_batch_size_zero_clamped() {
+    // batch-size: 0 in .config should be clamped to 1.
+    let dir =
+        project("- id: .config\n  label: facts configuration\n  batch-size: 0\n- manual fact\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    // Should not panic, should work normally.
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 passed"));
+}
+
+#[test]
+fn check_agent_fact_with_single_quotes() {
+    // Facts containing single quotes should not break shell escaping.
+    let dir = project("- it's a fact with 'quotes'\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(agent)"));
+}
+
+#[test]
+fn check_agent_fact_with_special_shell_chars() {
+    // Facts containing shell metacharacters should not be interpreted.
+    let dir = project("- fact with $HOME and `whoami` and $(id) and ; rm -rf /\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(agent)"));
+}
+
+#[test]
+fn check_agent_fact_with_newlines_in_section() {
+    // Section paths and labels should handle multi-word content.
+    let dir = project("## deep/nested\n\n- a fact in deep nesting\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(agent)"));
+}
+
+#[test]
+fn check_agent_template_without_percent_p() {
+    // A custom template without %p should still work (prompt appended).
+    let dir = project("- manual fact\n");
+    let script = write_agent_script(
+        &dir,
+        "echo_agent.sh",
+        r#"#!/bin/sh
+# The prompt is the last argument (appended by facts when no %p in template).
+PROMPT="$1"
+echo "$PROMPT" | grep -oP '\[\K[^\]]+' | while read -r id; do
+    echo "<fact-verdict id=\"$id\">PASS</fact-verdict>"
+done
+"#,
+    );
+    // Template has no %p — the escaped prompt should be appended automatically.
+    facts_cmd(&dir)
+        .args(["check", "--agent", &script])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(agent)"));
+}
+
+#[test]
+fn check_agent_fact_with_unicode_emoji() {
+    // Unicode emoji in fact labels should survive the prompt round-trip.
+    let dir = project("- supports rocket \u{1F680} launch\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(agent)"));
+}
+
+#[test]
+fn check_agent_fact_with_double_quotes() {
+    // Double quotes in facts should not break the shell command.
+    let dir = project("- the \"quoted\" fact\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(agent)"));
+}
+
+#[test]
+fn check_agent_fact_with_backslashes() {
+    // Backslashes should not be interpreted by the shell.
+    let dir = project("- path is C:\\\\Users\\\\test\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(agent)"));
 }

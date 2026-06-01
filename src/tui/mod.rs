@@ -1032,9 +1032,11 @@ impl App {
         };
 
         // Resolve batch size from .config, matching CLI behavior.
+        // Clamp to at least 1 to prevent division-by-zero and infinite loops.
         let batch_size = crate::config::read_config_value(&self.project_root, "batch-size")
             .and_then(|v| v.parse().ok())
-            .unwrap_or(10);
+            .unwrap_or(10_usize)
+            .max(1);
 
         std::thread::spawn(move || {
             let mut manual_facts: Vec<(usize, crate::agent::ManualFact)> = Vec::new();

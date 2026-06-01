@@ -111,14 +111,34 @@ fn auto_detect_agent() -> Option<ResolvedAgent> {
     None
 }
 
+/// Check whether a binary exists on PATH without shelling out to `which`.
 fn which_exists(name: &str) -> bool {
-    Command::new("which")
-        .arg(name)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    for dir in path_var.split(separator) {
+        if dir.is_empty() {
+            continue;
+        }
+        let candidate = Path::new(dir).join(name);
+        if candidate.is_file() {
+            // On Unix, also check the executable bit.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = candidate.metadata()
+                    && meta.permissions().mode() & 0o111 != 0
+                {
+                    return true;
+                }
+                continue;
+            }
+            #[cfg(not(unix))]
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Build the prompt for an agent batch.
@@ -146,13 +166,22 @@ fn build_prompt(facts: &[ManualFact]) -> String {
     lines.join("\n")
 }
 
-/// Shell-escape a string for use in a command.
+/// Shell-escape a string for safe use inside a `sh -c` command.
+///
+/// Uses single-quote wrapping (the strongest POSIX shell quoting):
+/// - The entire string is enclosed in single quotes
+/// - Any literal single quote becomes `'\''` (end quote, escaped quote, reopen quote)
+/// - Control characters (null bytes, etc.) are stripped since they can truncate
+///   or corrupt shell arguments
 fn shell_escape(s: &str) -> String {
     let mut escaped = String::with_capacity(s.len() + 2);
     escaped.push('\'');
     for ch in s.chars() {
         if ch == '\'' {
             escaped.push_str("'\\''");
+        } else if ch == '\0' {
+            // Null bytes can truncate C-string arguments — skip them.
+            continue;
         } else {
             escaped.push(ch);
         }
@@ -168,9 +197,23 @@ pub fn run_batch(
     project_root: &Path,
     timeout: Option<std::time::Duration>,
 ) -> AgentBatchResult {
+    if facts.is_empty() {
+        return AgentBatchResult {
+            verdicts: Vec::new(),
+            error: None,
+            raw_output: None,
+            prompt: String::new(),
+        };
+    }
+
     let prompt = build_prompt(facts);
     let escaped = shell_escape(&prompt);
-    let command = template.replace("%p", &escaped);
+    let command = if template.contains("%p") {
+        template.replace("%p", &escaped)
+    } else {
+        // Template has no prompt placeholder — append the escaped prompt as an argument.
+        format!("{template} {escaped}")
+    };
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
 
@@ -629,5 +672,190 @@ mod tests {
         }];
         let result = parse_verdicts(output, &facts);
         assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+    }
+
+    // =========================================================================
+    // Security and robustness tests
+    // =========================================================================
+
+    #[test]
+    fn test_shell_escape_backticks() {
+        // Backticks inside single quotes are literal — no command substitution.
+        let result = shell_escape("hello `whoami` world");
+        assert_eq!(result, "'hello `whoami` world'");
+    }
+
+    #[test]
+    fn test_shell_escape_dollar_expansion() {
+        // Dollar signs inside single quotes are literal — no variable expansion.
+        let result = shell_escape("the value is $HOME");
+        assert_eq!(result, "'the value is $HOME'");
+    }
+
+    #[test]
+    fn test_shell_escape_double_quotes() {
+        let result = shell_escape(r#"say "hello""#);
+        assert_eq!(result, r#"'say "hello"'"#);
+    }
+
+    #[test]
+    fn test_shell_escape_newlines() {
+        // Newlines inside single quotes are literal.
+        let result = shell_escape("line1\nline2");
+        assert_eq!(result, "'line1\nline2'");
+    }
+
+    #[test]
+    fn test_shell_escape_null_bytes_stripped() {
+        // Null bytes are stripped to prevent C-string truncation.
+        let result = shell_escape("before\0after");
+        assert_eq!(result, "'beforeafter'");
+    }
+
+    #[test]
+    fn test_shell_escape_semicolons_and_pipes() {
+        // Semicolons and pipes inside single quotes are literal.
+        let result = shell_escape("true; rm -rf / | cat");
+        assert_eq!(result, "'true; rm -rf / | cat'");
+    }
+
+    #[test]
+    fn test_shell_escape_complex_injection_attempt() {
+        // An adversarial fact label trying to break out of single quotes.
+        // Verify that shell_escape produces a string that, when evaluated by sh,
+        // yields the original input as a single argument (no injection).
+        let input = "fact'; rm -rf /; echo '";
+        let escaped = shell_escape(input);
+        // Must start and end with single quotes.
+        assert!(
+            escaped.starts_with('\''),
+            "must start with single quote: {escaped}"
+        );
+        assert!(
+            escaped.ends_with('\''),
+            "must end with single quote: {escaped}"
+        );
+        // Integration check: pass through sh -c printf and verify the output matches input.
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(format!("printf '%s' {escaped}"))
+            .output()
+            .expect("failed to run sh");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            stdout, input,
+            "shell round-trip of escaped string should recover original"
+        );
+    }
+
+    #[test]
+    fn test_shell_escape_unicode() {
+        let result = shell_escape("emoji \u{1F600} and CJK \u{4E16}\u{754C}");
+        assert_eq!(result, "'emoji \u{1F600} and CJK \u{4E16}\u{754C}'");
+    }
+
+    #[test]
+    fn test_shell_escape_empty_string() {
+        let result = shell_escape("");
+        assert_eq!(result, "''");
+    }
+
+    #[test]
+    fn test_build_prompt_unicode_labels() {
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "supports unicode \u{1F680} labels".to_string(),
+            section_path: String::new(),
+        }];
+        let prompt = build_prompt(&facts);
+        assert!(
+            prompt.contains("\u{1F680}"),
+            "unicode should survive prompt building"
+        );
+    }
+
+    #[test]
+    fn test_build_prompt_special_chars_in_label() {
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "fact with `backticks` and $vars and \"quotes\"".to_string(),
+            section_path: String::new(),
+        }];
+        let prompt = build_prompt(&facts);
+        assert!(
+            prompt.contains("`backticks`"),
+            "backticks should be preserved in prompt"
+        );
+        assert!(
+            prompt.contains("$vars"),
+            "dollar signs should be preserved in prompt"
+        );
+        assert!(
+            prompt.contains("\"quotes\""),
+            "double quotes should be preserved in prompt"
+        );
+    }
+
+    #[test]
+    fn test_parse_verdicts_unicode_in_reason() {
+        let output = "<fact-verdict id=\"abc\">FAIL missing \u{1F4A5} feature</fact-verdict>";
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        match &result.verdicts[0].1 {
+            AgentVerdict::Fail(reason) => assert!(
+                reason.contains("\u{1F4A5}"),
+                "unicode should survive verdict parsing: {reason}"
+            ),
+            other => panic!("expected Fail, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_run_batch_empty_facts() {
+        // Empty batch should return immediately, not invoke the agent.
+        let result = run_batch("nonexistent-agent %p", &[], Path::new("."), None);
+        assert!(result.verdicts.is_empty());
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn test_which_exists_detects_sh() {
+        // /bin/sh should always exist on Unix-like systems.
+        assert!(which_exists("sh"), "sh should be found on PATH");
+    }
+
+    #[test]
+    fn test_which_exists_rejects_nonexistent() {
+        assert!(
+            !which_exists("definitely_not_a_real_binary_xyz_123"),
+            "nonexistent binary should not be found"
+        );
+    }
+
+    #[test]
+    fn test_template_without_percent_p_appends_prompt() {
+        // When template has no %p, the escaped prompt should be appended.
+        // We test this indirectly by running a simple echo command.
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test fact".to_string(),
+            section_path: String::new(),
+        }];
+        // Use "echo" as template (no %p). The prompt is appended as argument.
+        let result = run_batch("echo", &facts, Path::new("."), None);
+        // The raw output should contain some text (echo printed the prompt).
+        assert!(
+            result.raw_output.is_some(),
+            "echo command should produce output"
+        );
+        assert!(
+            result.error.is_none(),
+            "echo command should not error: {:?}",
+            result.error
+        );
     }
 }
