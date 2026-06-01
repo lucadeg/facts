@@ -1081,7 +1081,7 @@ impl App {
                     }
                     let batch_end = (batch_start + 10).min(agent_inputs.len());
                     let batch = &agent_inputs[batch_start..batch_end];
-                    let result = crate::agent::run_batch(&agent.template, batch, &root);
+                    let result = crate::agent::run_batch(&agent.template, batch, &root, None);
 
                     for (i, (_, verdict)) in result.verdicts.iter().enumerate() {
                         let idx = manual_facts[batch_start + i].0;

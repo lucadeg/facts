@@ -425,6 +425,7 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
     } else {
         agent::resolve_agent(opts.agent.as_deref(), &root)
     };
+
     if let Some(ref agent) = resolved_agent
         && !manual_facts.is_empty()
     {
@@ -443,6 +444,7 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
         let _ = out.flush();
 
         let is_tty = color::enabled();
+        let agent_timeout = timeout;
         for batch_start in (0..manual_facts.len()).step_by(opts.batch_size) {
             let batch_end = (batch_start + opts.batch_size).min(manual_facts.len());
             let batch = &manual_facts[batch_start..batch_end];
@@ -457,10 +459,19 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
                 let _ = out.flush();
             }
 
-            let batch_result = agent::run_batch(&agent.template, batch, &root);
+            let batch_result = agent::run_batch(&agent.template, batch, &root, agent_timeout);
 
             if is_tty {
                 let _ = write!(out, "\r\x1b[2K");
+            }
+
+            // If the agent process itself failed, show the error once for the batch.
+            if let Some(ref err) = batch_result.error {
+                let _ = writeln!(
+                    out,
+                    "  {}",
+                    color::red(&format!("agent error (batch {batch_num}): {err}")),
+                );
             }
 
             for (i, (_, verdict)) in batch_result.verdicts.iter().enumerate() {

@@ -5646,3 +5646,127 @@ fn check_agent_respects_search_filter() {
         "expected beta fact filtered out: {stdout}"
     );
 }
+
+#[test]
+fn check_agent_nonexistent_binary_shows_error() {
+    // When the agent binary doesn't exist, the error message should explain what went wrong.
+    let dir = project("- manual fact\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", "/nonexistent/agent %p"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Should show an agent error message (not just silent "unresolved")
+    assert!(
+        stdout.contains("agent error"),
+        "expected agent error message in output: {stdout}"
+    );
+    // Facts should still be marked unresolved
+    assert!(
+        stdout.contains("unresolved"),
+        "expected unresolved in output: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_crash_shows_exit_code() {
+    // When the agent exits non-zero, the error should include the exit code.
+    let dir = project("- manual fact\n");
+    let script = write_agent_script(
+        &dir,
+        "mock_crash.sh",
+        "#!/bin/sh\necho 'something broke' >&2\nexit 42\n",
+    );
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("agent error"),
+        "expected agent error in output: {stdout}"
+    );
+    assert!(
+        stdout.contains("42"),
+        "expected exit code 42 in output: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_crash_shows_stderr_hint() {
+    // When agent crashes, the first line of stderr should be shown as a hint.
+    let dir = project("- manual fact\n");
+    let script = write_agent_script(
+        &dir,
+        "mock_crash.sh",
+        "#!/bin/sh\necho 'command not found: special-tool' >&2\nexit 127\n",
+    );
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("special-tool"),
+        "expected stderr hint in output: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_timeout_shows_timeout_error() {
+    // When the agent times out, the error message should mention the timeout.
+    let dir = project("- manual fact\n");
+    let script = write_agent_script(&dir, "mock_slow.sh", "#!/bin/sh\nsleep 30\n");
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template, "--timeout", "1"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("timed out"),
+        "expected timeout message in output: {stdout}"
+    );
+    assert!(
+        stdout.contains("unresolved"),
+        "expected unresolved in output: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_empty_batch_no_invocation() {
+    // When all facts have commands (no manual facts), agent should not be invoked.
+    // Even with a broken agent command, check should succeed because agent is never called.
+    let dir = project("- label: fact one\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--agent", "/nonexistent/agent %p"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 passed"))
+        .stdout(predicate::str::contains("0 manual"));
+}
+
+#[test]
+fn check_agent_error_per_batch() {
+    // With multiple batches where agent fails, each batch should show its error.
+    let dir = project("- manual one\n- manual two\n- manual three\n");
+    let script = failing_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template, "--batch-size", "2"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Should show agent error for batch 1
+    assert!(
+        stdout.contains("batch 1"),
+        "expected batch 1 error in output: {stdout}"
+    );
+    // Should show agent error for batch 2
+    assert!(
+        stdout.contains("batch 2"),
+        "expected batch 2 error in output: {stdout}"
+    );
+}

@@ -58,6 +58,8 @@ pub enum AgentVerdict {
 /// Result of running an agent batch.
 pub struct AgentBatchResult {
     pub verdicts: Vec<(String, AgentVerdict)>,
+    /// If the agent process itself failed, contains a description of what went wrong.
+    pub error: Option<String>,
 }
 
 /// A resolved agent with its command template and display name.
@@ -154,32 +156,126 @@ fn shell_escape(s: &str) -> String {
 }
 
 /// Run an agent batch and return verdicts.
-pub fn run_batch(template: &str, facts: &[ManualFact], project_root: &Path) -> AgentBatchResult {
+pub fn run_batch(
+    template: &str,
+    facts: &[ManualFact],
+    project_root: &Path,
+    timeout: Option<std::time::Duration>,
+) -> AgentBatchResult {
     let prompt = build_prompt(facts);
     let escaped = shell_escape(&prompt);
     let command = template.replace("%p", &escaped);
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
 
-    let output = Command::new(&shell)
-        .arg("-c")
+    let mut cmd = Command::new(&shell);
+    cmd.arg("-c")
         .arg(&command)
         .current_dir(project_root)
-        .output();
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
 
-    match output {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
+    let result = match timeout {
+        Some(dur) => run_agent_with_timeout(cmd, dur),
+        None => run_agent_no_timeout(cmd),
+    };
+
+    match result {
+        Ok((stdout, stderr)) => {
             let combined = format!("{stdout}{stderr}");
             parse_verdicts(&combined, facts)
         }
-        _ => {
+        Err(error_msg) => {
             let verdicts = facts
                 .iter()
                 .map(|f| (f.id.clone(), AgentVerdict::Unresolved))
                 .collect();
-            AgentBatchResult { verdicts }
+            AgentBatchResult {
+                verdicts,
+                error: Some(error_msg),
+            }
+        }
+    }
+}
+
+/// Run agent command without timeout, returning (stdout, stderr) or an error message.
+fn run_agent_no_timeout(mut cmd: Command) -> Result<(String, String), String> {
+    match cmd.output() {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            Ok((stdout, stderr))
+        }
+        Ok(output) => {
+            let code = output.status.code().unwrap_or(1);
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let stderr_hint = if stderr.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {}", stderr.trim().lines().next().unwrap_or(""))
+            };
+            Err(format!("agent exited with code {code}{stderr_hint}"))
+        }
+        Err(e) => Err(format!("failed to run agent: {e}")),
+    }
+}
+
+/// Run agent command with timeout, returning (stdout, stderr) or an error message.
+fn run_agent_with_timeout(
+    mut cmd: Command,
+    timeout: std::time::Duration,
+) -> Result<(String, String), String> {
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return Err(format!("failed to start agent: {e}")),
+    };
+
+    let start = std::time::Instant::now();
+    let poll_interval = std::time::Duration::from_millis(100);
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = child
+                    .stdout
+                    .take()
+                    .map(|mut s| {
+                        let mut buf = String::new();
+                        std::io::Read::read_to_string(&mut s, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
+                let stderr = child
+                    .stderr
+                    .take()
+                    .map(|mut e| {
+                        let mut buf = String::new();
+                        std::io::Read::read_to_string(&mut e, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
+                if status.success() {
+                    return Ok((stdout, stderr));
+                }
+                let code = status.code().unwrap_or(1);
+                let stderr_hint = if stderr.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", stderr.trim().lines().next().unwrap_or(""))
+                };
+                return Err(format!("agent exited with code {code}{stderr_hint}"));
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("agent timed out after {}s", timeout.as_secs()));
+                }
+                std::thread::sleep(poll_interval);
+            }
+            Err(e) => {
+                return Err(format!("failed to wait on agent: {e}"));
+            }
         }
     }
 }
@@ -204,7 +300,10 @@ fn parse_verdicts(output: &str, facts: &[ManualFact]) -> AgentBatchResult {
         })
         .collect();
 
-    AgentBatchResult { verdicts }
+    AgentBatchResult {
+        verdicts,
+        error: None,
+    }
 }
 
 struct ParsedVerdict {
