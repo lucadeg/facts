@@ -102,7 +102,7 @@ Every fact moves through this pipeline. At any point you can run `facts check` a
 
 <img src="assets/readme/howto-2.png" alt="2. Verify" width="700" />
 
-**Verify** your facts with `facts check`, which lints all files, runs every command, and groups results by status: green pass, red fail, yellow manual. Facts without commands are verified by the agent against the codebase. It exits 0 when everything passes, non-zero when anything fails. Plug it into CI or let your agent run it after every change.
+**Verify** your facts with `facts check`, which lints all files, runs every command, and sends manual facts to an AI agent for verification. It groups results by status: green pass, red fail, yellow manual/unresolved. Use `--agent claude` (or any preset: `codex`, `pi`, `droid`, `opencode`, `mi`) or set a persistent default with `facts config set agent claude`. Auto-detects agents on your PATH. It exits 0 when everything passes, non-zero when anything fails. Plug it into CI or let your agent run it after every change.
 
 <img src="assets/readme/howto-3.png" alt="3. Implement" width="700" />
 
@@ -151,8 +151,15 @@ Common short aliases (all extra args are passed through to the real command):
 facts                                    # list all facts (default)
 facts ll                                 # list in markdown-like skim format
 facts ll --tags "draft"                  # combine alias + filter
-facts check                              # verify everything
+facts check                              # verify everything (auto-detects agent)
+facts check --agent claude               # verify with a specific agent
+facts check --no-agent                   # command-facts only, skip agent
+facts check --id abc --agent claude      # verify one fact with the agent
 facts check --tags "mvp and not blocked" # filter by tag expression
+facts check -q                           # quiet: exit code only (for CI)
+facts check -v                           # verbose: show agent prompts/output
+facts config set agent claude            # persistent agent for checks
+facts config set batch-size 5            # facts per agent batch
 facts add "claim" --section api          # add a fact
 facts at <id> spec                       # quick tag add (or use the full edit form)
 facts rt <id> draft                      # quick tag remove
@@ -179,7 +186,7 @@ Extended documentation and the full article index live in the [facts GitHub wiki
 - [Facts CLI Reference](https://github.com/av/facts/wiki/Facts-CLI-Reference) — all subcommands, aliases (ll, at, rt), filters, and TUI
 - [Facts Lifecycle](https://github.com/av/facts/wiki/Facts-Lifecycle) — @draft → @spec → @implemented workflow with agent skills
 - [Facts with AI Agents](https://github.com/av/facts/wiki/Facts-with-AI-Agents) — integration with Claude, Cursor, and other agents
-- [Facts Check](https://github.com/av/facts/wiki/Facts-Check) — verification, CI, filters, and manual facts
+- [Facts Check](https://github.com/av/facts/wiki/Facts-Check) — verification, agent checks, CI, filters, and output flags
 
 The [Home page](https://github.com/av/facts/wiki/Home) and sidebar index every guide.
 
