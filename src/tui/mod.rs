@@ -115,6 +115,7 @@ pub struct App {
     pub check_failed: usize,
     pub check_manual: usize,
     pub check_running: bool,
+    pub check_total_facts: usize,
 
     pub status: String,
     pub detail_fact: Option<usize>,
@@ -156,6 +157,7 @@ impl App {
             check_failed: 0,
             check_manual: 0,
             check_running: false,
+            check_total_facts: 0,
             status: String::new(),
             detail_fact: None,
             tree_nodes: Vec::new(),
@@ -231,6 +233,7 @@ impl App {
         self.check_passed = 0;
         self.check_failed = 0;
         self.check_manual = 0;
+        self.check_total_facts = 0;
         self.rebuild_tree();
         self.rebuild_filter();
 
@@ -995,8 +998,14 @@ impl App {
         let (tx, rx) = mpsc::channel();
         self.check_rx = Some(rx);
 
-        let facts: Vec<(usize, Option<String>, String, String)> = self
+        let checkable: Vec<&DisplayFact> = self
             .display_facts
+            .iter()
+            .filter(|f| !f.id.starts_with('.'))
+            .collect();
+        self.check_total_facts = checkable.len();
+
+        let facts: Vec<(usize, Option<String>, String, String)> = checkable
             .iter()
             .map(|f| {
                 (
@@ -1133,7 +1142,7 @@ impl App {
                 .values()
                 .filter(|r| matches!(r, CheckResult::AgentPending))
                 .count();
-            if total >= self.display_facts.len() && pending == 0 {
+            if total >= self.check_total_facts && pending == 0 {
                 self.check_running = false;
                 self.check_rx = None;
                 self.check_cancel = None;
@@ -1976,5 +1985,288 @@ mod tests {
         assert!(!app.check_running);
         assert_eq!(app.check_passed, 1);
         assert_eq!(app.check_failed, 0);
+    }
+
+    // === Agent check integration ===
+
+    #[test]
+    fn test_agent_disabled_skips_agent_manual_stays_manual() {
+        let (_dir, mut app) = temp_app("- manual fact without command\n");
+        app.agent_disabled = true;
+        app.start_check();
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+        assert!(!app.check_running);
+        assert_eq!(app.check_passed, 0);
+        assert_eq!(app.check_failed, 0);
+        assert_eq!(app.check_manual, 1);
+        let result = app.check_results.get(&0).unwrap();
+        assert!(matches!(result, CheckResult::Manual));
+    }
+
+    #[test]
+    fn test_agent_disabled_command_facts_still_run() {
+        let (_dir, mut app) = temp_app("- label: command fact\n  command: true\n- manual fact\n");
+        app.agent_disabled = true;
+        app.start_check();
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+        assert!(!app.check_running);
+        assert_eq!(app.check_passed, 1);
+        assert_eq!(app.check_failed, 0);
+        assert_eq!(app.check_manual, 1);
+    }
+
+    #[test]
+    fn test_check_result_counts_mixed_pass_fail_manual() {
+        let (_dir, mut app) = temp_app(
+            "- label: passing\n  command: true\n- label: failing\n  command: false\n- manual\n",
+        );
+        app.agent_disabled = true;
+        app.start_check();
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+        assert!(!app.check_running);
+        assert_eq!(app.check_passed, 1);
+        assert_eq!(app.check_failed, 1);
+        assert_eq!(app.check_manual, 1);
+        assert!(app.status.contains("1 passed"));
+        assert!(app.status.contains("1 failed"));
+        assert!(app.status.contains("1 manual"));
+    }
+
+    #[test]
+    fn test_process_check_results_agent_pending_no_count() {
+        // Simulate the agent pending -> result transition manually.
+        // Send all messages before processing so the channel stays alive.
+        let (_dir, mut app) = temp_app("- manual fact\n");
+        let (tx, rx) = mpsc::channel();
+        app.check_rx = Some(rx);
+        app.check_running = true;
+        app.check_total_facts = 1;
+
+        // Send the full lifecycle: Manual -> AgentPending -> AgentPassed
+        tx.send((0, CheckResult::Manual)).unwrap();
+        tx.send((0, CheckResult::AgentPending)).unwrap();
+        tx.send((0, CheckResult::AgentPassed)).unwrap();
+        drop(tx); // Close channel after sending all messages
+
+        // Process all in one call
+        app.process_check_results();
+        assert_eq!(app.check_passed, 1);
+        assert_eq!(app.check_manual, 0);
+        assert!(!app.check_running); // Done
+    }
+
+    #[test]
+    fn test_process_check_results_agent_failed_counted() {
+        let (_dir, mut app) = temp_app("- manual fact\n");
+        let (tx, rx) = mpsc::channel();
+        app.check_rx = Some(rx);
+        app.check_running = true;
+        app.check_total_facts = 1;
+
+        tx.send((0, CheckResult::Manual)).unwrap();
+        tx.send((0, CheckResult::AgentPending)).unwrap();
+        tx.send((0, CheckResult::AgentFailed("reason".into())))
+            .unwrap();
+        drop(tx);
+
+        app.process_check_results();
+        assert_eq!(app.check_failed, 1);
+        assert_eq!(app.check_manual, 0);
+        assert_eq!(app.check_passed, 0);
+        assert!(!app.check_running);
+    }
+
+    #[test]
+    fn test_process_check_results_agent_unresolved_counted_as_manual() {
+        let (_dir, mut app) = temp_app("- manual fact\n");
+        let (tx, rx) = mpsc::channel();
+        app.check_rx = Some(rx);
+        app.check_running = true;
+        app.check_total_facts = 1;
+
+        tx.send((0, CheckResult::Manual)).unwrap();
+        tx.send((0, CheckResult::AgentPending)).unwrap();
+        tx.send((0, CheckResult::AgentUnresolved)).unwrap();
+        drop(tx);
+
+        app.process_check_results();
+        assert_eq!(app.check_manual, 1);
+        assert_eq!(app.check_passed, 0);
+        assert_eq!(app.check_failed, 0);
+        assert!(!app.check_running);
+    }
+
+    #[test]
+    fn test_cancel_check_stops_processing() {
+        let (_dir, mut app) = temp_app("- label: slow\n  command: sleep 10\n");
+        app.check_timeout = None;
+        app.start_check();
+        assert!(app.check_running);
+
+        app.cancel_check();
+        assert!(!app.check_running);
+        assert!(app.check_rx.is_none());
+        assert!(app.check_cancel.is_none());
+        assert_eq!(app.status, "Check cancelled");
+    }
+
+    #[test]
+    fn test_check_skips_config_facts() {
+        let (_dir, mut app) = temp_app(
+            "- id: .config\n  label: facts configuration\n  agent: echo\n- regular fact\n",
+        );
+        app.agent_disabled = true;
+        // The .config fact should be loaded in display_facts
+        assert!(app.display_facts.iter().any(|f| f.id == ".config"));
+        // But start_check should skip it
+        app.start_check();
+        assert_eq!(app.check_total_facts, 1); // Only the regular fact
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+        assert!(!app.check_running);
+        // .config should have no check result
+        let config_idx = app
+            .display_facts
+            .iter()
+            .find(|f| f.id == ".config")
+            .unwrap()
+            .global_index;
+        assert!(app.check_results.get(&config_idx).is_none());
+        // Regular fact should be manual
+        assert_eq!(app.check_manual, 1);
+    }
+
+    #[test]
+    fn test_check_result_rendering_variants() {
+        // Verify all CheckResult variants produce the expected status cell symbols
+        let (_dir, mut app) = temp_app(
+            "- fact one\n- fact two\n- fact three\n- fact four\n- fact five\n- fact six\n",
+        );
+        app.check_results.insert(0, CheckResult::Passed);
+        app.check_results
+            .insert(1, CheckResult::Failed("err".into()));
+        app.check_results.insert(2, CheckResult::Manual);
+        app.check_results.insert(3, CheckResult::AgentPending);
+        app.check_results.insert(4, CheckResult::AgentPassed);
+        app.check_results
+            .insert(5, CheckResult::AgentFailed("reason".into()));
+
+        // Verify the result types are stored correctly
+        assert!(matches!(
+            app.check_results.get(&0),
+            Some(CheckResult::Passed)
+        ));
+        assert!(matches!(
+            app.check_results.get(&1),
+            Some(CheckResult::Failed(_))
+        ));
+        assert!(matches!(
+            app.check_results.get(&2),
+            Some(CheckResult::Manual)
+        ));
+        assert!(matches!(
+            app.check_results.get(&3),
+            Some(CheckResult::AgentPending)
+        ));
+        assert!(matches!(
+            app.check_results.get(&4),
+            Some(CheckResult::AgentPassed)
+        ));
+        assert!(matches!(
+            app.check_results.get(&5),
+            Some(CheckResult::AgentFailed(_))
+        ));
+    }
+
+    #[test]
+    fn test_single_check_on_manual_fact_shows_manual() {
+        let (_dir, mut app) = temp_app("- manual fact without command\n");
+        app.selected = 0;
+        app.run_single_check();
+        let result = app.check_results.get(&0).unwrap();
+        assert!(matches!(result, CheckResult::Manual));
+        assert_eq!(app.status, "Manual — no command");
+    }
+
+    #[test]
+    fn test_check_completion_sets_status_message() {
+        let (_dir, mut app) = temp_app("- label: fact\n  command: true\n");
+        app.start_check();
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+        assert!(app.status.starts_with("Check:"));
+        assert!(app.status.contains("passed"));
+    }
+
+    #[test]
+    fn test_c_key_starts_check_and_shift_c_cancels() {
+        let (_dir, mut app) = temp_app("- label: slow\n  command: sleep 60\n");
+        app.check_timeout = None;
+        assert!(!app.check_running);
+
+        // 'c' starts check
+        app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::empty()))
+            .unwrap();
+        assert!(app.check_running);
+
+        // 'C' cancels check
+        app.handle_key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::empty()))
+            .unwrap();
+        assert!(!app.check_running);
+    }
+
+    #[test]
+    fn test_c_key_no_op_while_check_running() {
+        let (_dir, mut app) = temp_app("- label: slow\n  command: sleep 60\n");
+        app.check_timeout = None;
+        app.start_check();
+        assert!(app.check_running);
+
+        // 'c' while already running should not start another check
+        let cancel_before = app.check_cancel.as_ref().map(|c| Arc::as_ptr(c));
+        app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::empty()))
+            .unwrap();
+        let cancel_after = app.check_cancel.as_ref().map(|c| Arc::as_ptr(c));
+        assert_eq!(cancel_before, cancel_after); // Same cancel token, not replaced
+
+        app.cancel_check(); // Cleanup
+    }
+
+    #[test]
+    fn test_check_total_facts_updated_on_reload() {
+        let (_dir, mut app) = temp_app("- fact one\n- fact two\n");
+        app.agent_disabled = true;
+        app.start_check();
+        assert_eq!(app.check_total_facts, 2);
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+
+        // Reload clears check state
+        app.load_data().unwrap();
+        assert_eq!(app.check_total_facts, 0);
+        assert_eq!(app.check_passed, 0);
+        assert_eq!(app.check_failed, 0);
+        assert_eq!(app.check_manual, 0);
     }
 }

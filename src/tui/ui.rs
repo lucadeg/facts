@@ -642,7 +642,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     if app.check_running {
         let total = app.check_passed + app.check_failed + app.check_manual;
         spans.push(Span::styled(
-            format!(" checking {}/{} ", total, app.display_facts.len()),
+            format!(" checking {}/{} ", total, app.check_total_facts),
             Style::default().fg(theme::MANUAL),
         ));
     } else if app.check_passed + app.check_failed + app.check_manual > 0 {
