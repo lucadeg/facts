@@ -567,6 +567,9 @@
   tags: [implemented]
 - manual facts footer in check output uses correct singular/plural grammar ('1 fact has' / 'N facts have') @implemented
 - manual facts footer wording is precise ('verify each against the code and state PASS or FAIL with a one-line reason') @implemented
+- label: check --id flag filters to specific fact IDs, composable with all other filters
+  command: cargo run -- check --help 2>&1 | grep -q "\-\-id"
+  tags: [implemented]
 
 ### agent
 - label: --agent flag accepts a shell command template with %p as the prompt placeholder, or a preset name

@@ -95,6 +95,10 @@ enum Command {
 
     /// Run all command-facts, report pass/fail/manual.
     Check {
+        /// Check only the fact(s) with these IDs.
+        #[arg(long)]
+        id: Vec<String>,
+
         /// Boolean tag filter expression (e.g. "mvp and not blocked").
         #[arg(long)]
         tags: Option<String>,
@@ -111,15 +115,17 @@ enum Command {
         #[arg(long)]
         timeout: Option<u64>,
 
-        /// Agent command template (e.g. "claude -p %p") or preset name (claude, codex, pi, droid, opencode, mi).
+        /// Agent for manual facts: a preset name (claude, codex, pi, droid, opencode, mi) or
+        /// a shell command template with %p as the prompt placeholder (e.g. "claude -p %p").
+        /// Without this flag, auto-detects by checking .config agent, then scanning PATH for presets.
         #[arg(long, conflicts_with = "no_agent")]
         agent: Option<String>,
 
-        /// Skip agent verification of manual facts.
+        /// Suppress agent verification of manual facts entirely (skip auto-detection and .config).
         #[arg(long, conflicts_with = "agent")]
         no_agent: bool,
 
-        /// Number of manual facts per agent batch (default: 10).
+        /// Number of manual facts per agent batch (default: 10, configurable via `facts config set batch-size N`).
         #[arg(long)]
         batch_size: Option<usize>,
 
@@ -256,7 +262,8 @@ enum Command {
         action: Option<SkillsCommand>,
     },
 
-    /// Manage tool configuration (.config fact).
+    /// Manage tool configuration (.config fact). Known keys: agent (preset name or
+    /// command template), batch-size (facts per agent batch).
     Config {
         #[command(subcommand)]
         action: ConfigCommand,
@@ -273,9 +280,10 @@ enum ConfigCommand {
         /// The config key to look up.
         key: String,
     },
-    /// Set a config value (creates .config if needed).
+    /// Set a config value (creates .config if needed). Known keys: agent (preset name like
+    /// "claude" or command template like "claude -p %p"), batch-size (facts per agent batch).
     Set {
-        /// The config key.
+        /// The config key (e.g. "agent", "batch-size").
         key: String,
         /// The config value.
         value: String,
@@ -404,6 +412,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Some(Command::Check {
+            id,
             tags,
             search,
             depth,
@@ -415,6 +424,7 @@ fn main() -> anyhow::Result<()> {
             verbose,
         }) => {
             let opts = check::CheckOptions {
+                id_filter: if id.is_empty() { None } else { Some(id) },
                 tags_expr: tags,
                 search_expr: search,
                 depth,

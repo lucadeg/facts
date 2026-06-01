@@ -17,6 +17,7 @@ use crate::tags::{matches_search_expr, matches_tag_expr, validate_tag_expr};
 
 /// Options for the check command.
 pub struct CheckOptions {
+    pub id_filter: Option<Vec<String>>,
     pub tags_expr: Option<String>,
     pub search_expr: Option<String>,
     pub depth: Option<usize>,
@@ -360,6 +361,12 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
             fact_idx += 1;
 
             if fact.is_config() {
+                continue;
+            }
+
+            if let Some(ref ids) = opts.id_filter
+                && !ids.iter().any(|f| f == &id)
+            {
                 continue;
             }
 

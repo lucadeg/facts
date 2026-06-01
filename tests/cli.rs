@@ -6057,3 +6057,221 @@ fn check_summary_shows_unresolved_separately() {
         "expected '1 unresolved' in summary: {stdout}"
     );
 }
+
+// ===========================================================================
+// check --id filter
+// ===========================================================================
+
+#[test]
+fn check_id_filters_to_single_fact() {
+    let dir =
+        project("- label: first\n  command: \"true\"\n- label: second\n  command: \"true\"\n");
+
+    // Get the ID for the first fact via list.
+    let list_output = facts_cmd(&dir).arg("list").output().unwrap();
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    let first_id = list_stdout
+        .lines()
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+
+    let output = facts_cmd(&dir)
+        .args(["check", "--id", &first_id, "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Only the matched fact should appear, total should be 1.
+    assert!(
+        stdout.contains("1 passed"),
+        "expected 1 passed for single ID filter: {stdout}"
+    );
+}
+
+#[test]
+fn check_id_multiple_ids() {
+    let dir = project(
+        "- label: alpha\n  command: \"true\"\n- label: beta\n  command: \"true\"\n- label: gamma\n  command: \"true\"\n",
+    );
+    // Get the IDs (alpha=jd9, beta=bue based on hashing — let's just check output count).
+    let output = facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout_all = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout_all.contains("3 passed"),
+        "expected 3 passed without filter: {stdout_all}"
+    );
+
+    // Extract the IDs from list output.
+    let list_output = facts_cmd(&dir).arg("list").output().unwrap();
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    let ids: Vec<&str> = list_stdout
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .collect();
+    assert!(ids.len() >= 3, "expected at least 3 IDs: {:?}", ids);
+
+    // Check with first two IDs.
+    let output = facts_cmd(&dir)
+        .args(["check", "--id", ids[0], "--id", ids[1], "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("2 passed"),
+        "expected 2 passed with two ID filter: {stdout}"
+    );
+}
+
+#[test]
+fn check_id_no_match_shows_zero() {
+    let dir = project("- label: exists\n  command: \"true\"\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--id", "zzz", "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("0 passed"),
+        "expected 0 passed with nonexistent ID: {stdout}"
+    );
+}
+
+#[test]
+fn check_id_with_agent_on_manual_fact() {
+    let dir = project("- manual alpha\n- manual beta\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+
+    // Get the ID for the first fact.
+    let list_output = facts_cmd(&dir).arg("list").output().unwrap();
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    let first_id = list_stdout
+        .lines()
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap();
+
+    let output = facts_cmd(&dir)
+        .args(["check", "--id", first_id, "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Should only verify 1 fact, not both.
+    assert!(
+        stdout.contains("Verifying 1 manual"),
+        "expected 1 manual fact sent to agent: {stdout}"
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "expected 1 passed for single ID agent check: {stdout}"
+    );
+}
+
+#[test]
+fn check_id_composes_with_tags_filter() {
+    let dir = project(
+        "- label: tagged\n  command: \"true\"\n  tags: [mvp]\n- label: untagged\n  command: \"true\"\n",
+    );
+
+    let list_output = facts_cmd(&dir).arg("list").output().unwrap();
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    let ids: Vec<&str> = list_stdout
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .collect();
+
+    // Check with the untagged fact's ID but also --tags mvp — should find nothing
+    // because the fact matched by ID doesn't have the tag.
+    let output = facts_cmd(&dir)
+        .args(["check", "--id", ids[1], "--tags", "mvp", "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("0 passed"),
+        "expected 0 passed when ID and tag filter are incompatible: {stdout}"
+    );
+}
+
+// ===========================================================================
+// config help and discoverability
+// ===========================================================================
+
+#[test]
+fn config_help_mentions_known_keys() {
+    let dir = project("- fact\n");
+    let output = facts_cmd(&dir).args(["config", "--help"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("agent") && stdout.contains("batch-size"),
+        "config help should mention known keys: {stdout}"
+    );
+}
+
+#[test]
+fn config_set_help_mentions_agent_presets() {
+    let dir = project("- fact\n");
+    let output = facts_cmd(&dir)
+        .args(["config", "set", "--help"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("claude") && stdout.contains("batch-size"),
+        "config set help should mention preset names and known keys: {stdout}"
+    );
+}
+
+#[test]
+fn check_help_mentions_auto_detection() {
+    let dir = project("- fact\n");
+    let output = facts_cmd(&dir).args(["check", "--help"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("auto-detect"),
+        "check help should mention agent auto-detection: {stdout}"
+    );
+}
+
+#[test]
+fn check_help_mentions_all_presets() {
+    let dir = project("- fact\n");
+    let output = facts_cmd(&dir).args(["check", "--help"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for preset in &["claude", "codex", "pi", "droid", "opencode", "mi"] {
+        assert!(
+            stdout.contains(preset),
+            "check help should mention preset '{preset}': {stdout}"
+        );
+    }
+}
+
+#[test]
+fn check_help_mentions_id_flag() {
+    let dir = project("- fact\n");
+    let output = facts_cmd(&dir).args(["check", "--help"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("--id"),
+        "check help should mention --id flag: {stdout}"
+    );
+}
+
+#[test]
+fn check_no_agent_help_mentions_suppression() {
+    let dir = project("- fact\n");
+    let output = facts_cmd(&dir).args(["check", "--help"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Suppress") || stdout.contains("suppress"),
+        "check --no-agent help should mention suppression: {stdout}"
+    );
+}
