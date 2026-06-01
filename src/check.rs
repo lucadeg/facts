@@ -23,8 +23,10 @@ pub struct CheckOptions {
     pub timeout: Option<u64>,
     pub agent: Option<String>,
     pub no_agent: bool,
-    pub batch_size: usize,
+    pub batch_size: Option<usize>,
 }
+
+const DEFAULT_BATCH_SIZE: usize = 10;
 
 /// Result of running a single command-fact.
 struct CheckResult {
@@ -275,6 +277,13 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
         return Ok(false);
     }
 
+    // Resolve batch size: CLI flag > .config batch-size > default.
+    let batch_size = opts.batch_size.unwrap_or_else(|| {
+        crate::config::read_config_value(&root, "batch-size")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_BATCH_SIZE)
+    });
+
     // Lint all files first — fail early on structural errors.
     let mut lint_errors = false;
     for path in &files {
@@ -429,7 +438,7 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
     if let Some(ref agent) = resolved_agent
         && !manual_facts.is_empty()
     {
-        let total_batches = manual_facts.len().div_ceil(opts.batch_size);
+        let total_batches = manual_facts.len().div_ceil(batch_size);
         let _ = writeln!(
             out,
             "\n{}",
@@ -445,10 +454,10 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
 
         let is_tty = color::enabled();
         let agent_timeout = timeout;
-        for batch_start in (0..manual_facts.len()).step_by(opts.batch_size) {
-            let batch_end = (batch_start + opts.batch_size).min(manual_facts.len());
+        for batch_start in (0..manual_facts.len()).step_by(batch_size) {
+            let batch_end = (batch_start + batch_size).min(manual_facts.len());
             let batch = &manual_facts[batch_start..batch_end];
-            let batch_num = batch_start / opts.batch_size + 1;
+            let batch_num = batch_start / batch_size + 1;
 
             if is_tty {
                 let _ = write!(

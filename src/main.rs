@@ -411,7 +411,7 @@ fn main() -> anyhow::Result<()> {
                 timeout,
                 agent,
                 no_agent,
-                batch_size: batch_size.unwrap_or(10),
+                batch_size,
             };
             let all_passed = check::run(&opts)?;
             if !all_passed {

@@ -90,7 +90,9 @@ fn resolve_preset_or_literal(agent: &str) -> (String, String) {
             return (preset.template.to_string(), preset.name.to_string());
         }
     }
-    (agent.to_string(), agent.to_string())
+    // Extract just the binary name for display (first whitespace-delimited token).
+    let name = agent.split_whitespace().next().unwrap_or(agent).to_string();
+    (agent.to_string(), name)
 }
 
 fn auto_detect_agent() -> Option<ResolvedAgent> {
@@ -118,13 +120,13 @@ fn which_exists(name: &str) -> bool {
 /// Build the prompt for an agent batch.
 fn build_prompt(facts: &[ManualFact]) -> String {
     let mut lines = vec![
-        "You are verifying facts about a codebase. For each fact below, check whether it is true by examining the code and project state.".to_string(),
+        "You are verifying facts about a codebase. Each fact below is an atomic truth claim. Read the relevant source files, configs, and project state to determine whether each fact holds.".to_string(),
         String::new(),
-        "Respond with one XML tag per fact:".to_string(),
-        "- If the fact is true: <fact-verdict id=\"ID\">PASS</fact-verdict>".to_string(),
-        "- If the fact is false: <fact-verdict id=\"ID\">FAIL reason</fact-verdict>".to_string(),
+        "For EVERY fact, respond with exactly one XML verdict tag. Do not skip any.".to_string(),
+        "- True:  <fact-verdict id=\"ID\">PASS</fact-verdict>".to_string(),
+        "- False: <fact-verdict id=\"ID\">FAIL one-line reason</fact-verdict>".to_string(),
         String::new(),
-        "Facts to verify:".to_string(),
+        format!("Facts to verify ({}):", facts.len()),
         String::new(),
     ];
 
@@ -418,7 +420,7 @@ mod tests {
         );
         assert_eq!(
             resolve_preset_or_literal("custom cmd %p"),
-            ("custom cmd %p".to_string(), "custom cmd %p".to_string())
+            ("custom cmd %p".to_string(), "custom".to_string())
         );
     }
 
@@ -517,6 +519,60 @@ mod tests {
         assert!(prompt.contains("[def]"));
         assert!(prompt.contains("another fact"));
         assert!(prompt.contains("fact-verdict"));
+    }
+
+    #[test]
+    fn test_build_prompt_includes_fact_count() {
+        let facts = vec![
+            ManualFact {
+                id: "a".to_string(),
+                label: "one".to_string(),
+                section_path: String::new(),
+            },
+            ManualFact {
+                id: "b".to_string(),
+                label: "two".to_string(),
+                section_path: String::new(),
+            },
+            ManualFact {
+                id: "c".to_string(),
+                label: "three".to_string(),
+                section_path: String::new(),
+            },
+        ];
+        let prompt = build_prompt(&facts);
+        assert!(
+            prompt.contains("Facts to verify (3):"),
+            "prompt should include fact count: {prompt}"
+        );
+    }
+
+    #[test]
+    fn test_build_prompt_instructs_no_skipping() {
+        let facts = vec![ManualFact {
+            id: "x".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let prompt = build_prompt(&facts);
+        assert!(
+            prompt.contains("Do not skip any"),
+            "prompt should instruct agent not to skip facts: {prompt}"
+        );
+    }
+
+    #[test]
+    fn test_custom_template_name_extracts_binary() {
+        // A literal template should use the first word (binary name) as display name.
+        let (template, name) = resolve_preset_or_literal("/usr/local/bin/my-agent -p %p --verbose");
+        assert_eq!(template, "/usr/local/bin/my-agent -p %p --verbose");
+        assert_eq!(name, "/usr/local/bin/my-agent");
+    }
+
+    #[test]
+    fn test_preset_name_unchanged() {
+        let (_, name) = resolve_preset_or_literal("claude");
+        assert_eq!(name, "claude");
     }
 
     #[test]

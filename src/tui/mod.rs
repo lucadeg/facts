@@ -1005,23 +1005,22 @@ impl App {
             .collect();
         self.check_total_facts = checkable.len();
 
-        let facts: Vec<(usize, Option<String>, String, String)> = checkable
+        // Each fact carries its global_index, optional command, and agent-ready metadata.
+        struct CheckFact {
+            global_index: usize,
+            command: Option<String>,
+            id: String,
+            label: String,
+            section_path: String,
+        }
+        let facts: Vec<CheckFact> = checkable
             .iter()
-            .map(|f| {
-                (
-                    f.global_index,
-                    f.command.clone(),
-                    f.id.clone(),
-                    format!(
-                        "{}{}",
-                        if f.section_path.is_empty() {
-                            String::new()
-                        } else {
-                            format!("{}/", f.section_path.join("/"))
-                        },
-                        f.label
-                    ),
-                )
+            .map(|f| CheckFact {
+                global_index: f.global_index,
+                command: f.command.clone(),
+                id: f.id.clone(),
+                label: f.label.clone(),
+                section_path: f.section_cli_path(),
             })
             .collect();
         let root = self.project_root.clone();
@@ -1032,14 +1031,19 @@ impl App {
             crate::agent::resolve_agent(None, &root)
         };
 
-        std::thread::spawn(move || {
-            let mut manual_facts: Vec<(usize, String, String)> = Vec::new();
+        // Resolve batch size from .config, matching CLI behavior.
+        let batch_size = crate::config::read_config_value(&self.project_root, "batch-size")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10);
 
-            for (idx, command, fact_id, fact_path) in &facts {
+        std::thread::spawn(move || {
+            let mut manual_facts: Vec<(usize, crate::agent::ManualFact)> = Vec::new();
+
+            for fact in &facts {
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
-                let status = match command {
+                let status = match &fact.command {
                     Some(cmd) => {
                         let (exit_code, stderr) = crate::check::run_command(cmd, &root, timeout);
                         if exit_code == 0 {
@@ -1049,11 +1053,18 @@ impl App {
                         }
                     }
                     None => {
-                        manual_facts.push((*idx, fact_id.clone(), fact_path.clone()));
+                        manual_facts.push((
+                            fact.global_index,
+                            crate::agent::ManualFact {
+                                id: fact.id.clone(),
+                                label: fact.label.clone(),
+                                section_path: fact.section_path.clone(),
+                            },
+                        ));
                         CheckResult::Manual
                     }
                 };
-                if tx.send((*idx, status)).is_err() {
+                if tx.send((fact.global_index, status)).is_err() {
                     return;
                 }
             }
@@ -1063,34 +1074,29 @@ impl App {
             }
 
             if let Some(ref agent) = resolved_agent {
-                for (idx, _, _) in &manual_facts {
+                for (idx, _) in &manual_facts {
                     if tx.send((*idx, CheckResult::AgentPending)).is_err() {
                         return;
                     }
                 }
 
-                let agent_inputs: Vec<crate::agent::ManualFact> = manual_facts
-                    .iter()
-                    .map(|(_, id, path)| {
-                        let (section_path, label) = match path.rfind('/') {
-                            Some(pos) => (path[..pos].to_string(), path[pos + 1..].to_string()),
-                            None => (String::new(), path.clone()),
-                        };
-                        crate::agent::ManualFact {
-                            id: id.clone(),
-                            label,
-                            section_path,
-                        }
-                    })
-                    .collect();
+                let agent_inputs: Vec<&crate::agent::ManualFact> =
+                    manual_facts.iter().map(|(_, mf)| mf).collect();
 
-                for batch_start in (0..agent_inputs.len()).step_by(10) {
+                for batch_start in (0..agent_inputs.len()).step_by(batch_size) {
                     if cancel.load(Ordering::Relaxed) {
                         break;
                     }
-                    let batch_end = (batch_start + 10).min(agent_inputs.len());
-                    let batch = &agent_inputs[batch_start..batch_end];
-                    let result = crate::agent::run_batch(&agent.template, batch, &root, None);
+                    let batch_end = (batch_start + batch_size).min(agent_inputs.len());
+                    let batch: Vec<crate::agent::ManualFact> = agent_inputs[batch_start..batch_end]
+                        .iter()
+                        .map(|mf| crate::agent::ManualFact {
+                            id: mf.id.clone(),
+                            label: mf.label.clone(),
+                            section_path: mf.section_path.clone(),
+                        })
+                        .collect();
+                    let result = crate::agent::run_batch(&agent.template, &batch, &root, timeout);
 
                     for (i, (_, verdict)) in result.verdicts.iter().enumerate() {
                         let idx = manual_facts[batch_start + i].0;
