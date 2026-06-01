@@ -99,6 +99,10 @@ enum Command {
         #[arg(long)]
         id: Vec<String>,
 
+        /// Filter by section path (e.g. "cli/check"). Case-insensitive sub-path match.
+        #[arg(long)]
+        section: Option<String>,
+
         /// Boolean tag filter expression (e.g. "mvp and not blocked").
         #[arg(long)]
         tags: Option<String>,
@@ -413,6 +417,7 @@ fn main() -> anyhow::Result<()> {
         }
         Some(Command::Check {
             id,
+            section,
             tags,
             search,
             depth,
@@ -425,6 +430,7 @@ fn main() -> anyhow::Result<()> {
         }) => {
             let opts = check::CheckOptions {
                 id_filter: if id.is_empty() { None } else { Some(id) },
+                section_filter: section,
                 tags_expr: tags,
                 search_expr: search,
                 depth,

@@ -434,6 +434,9 @@
 - label: get shows file path
   command: grep -q "file:" src/get.rs && grep -q "sheet.filename" src/get.rs
   tags: [implemented]
+- label: get shows 'verification: manual (no command)' for facts without a command
+  command: grep -q "verification: manual" src/get.rs
+  tags: [implemented]
 
 ## subcommands
 - label: move — relocate a fact by ID to a different section or file
@@ -551,6 +554,9 @@
 - label: --search and --depth compose with existing filters (--section, --tags, --file, --manual) via AND
   command: cargo run -- list --search "init" --section "cli" --depth 2 2>&1 | grep -q "init"
   tags: [implemented]
+- label: list shows a dim indicator per fact: checkmark for command facts, question mark for manual facts
+  command: grep -q "cmd_indicator" src/list.rs && grep -q "has_command" src/list.rs
+  tags: [implemented]
 
 ## check
 - label: timeout exit code is 124
@@ -569,6 +575,9 @@
 - manual facts footer wording is precise ('verify each against the code and state PASS or FAIL with a one-line reason') @implemented
 - label: check --id flag filters to specific fact IDs, composable with all other filters
   command: cargo run -- check --help 2>&1 | grep -q "\-\-id"
+  tags: [implemented]
+- label: check --section flag filters by section path, case-insensitive sub-path match, consistent with list --section
+  command: cargo run -- check --help 2>&1 | grep -q "\-\-section"
   tags: [implemented]
 
 ### agent
@@ -628,6 +637,9 @@
   tags: [implemented]
 - label: resolve_agent returns the detected agent display name alongside the template
   command: grep -q 'pub struct ResolvedAgent' src/agent.rs
+  tags: [implemented]
+- label: check summary shows agent hint when manual facts exist and no agent is configured
+  command: grep -q "Use --agent to enable agent verification" src/check.rs
   tags: [implemented]
 
 ## skills

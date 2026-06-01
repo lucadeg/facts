@@ -18,6 +18,7 @@ use crate::tags::{matches_search_expr, matches_tag_expr, validate_tag_expr};
 /// Options for the check command.
 pub struct CheckOptions {
     pub id_filter: Option<Vec<String>>,
+    pub section_filter: Option<String>,
     pub tags_expr: Option<String>,
     pub search_expr: Option<String>,
     pub depth: Option<usize>,
@@ -374,6 +375,12 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
                 continue;
             }
 
+            if let Some(ref section) = opts.section_filter
+                && !crate::list::section_matches(&section_path.join("/"), section)
+            {
+                continue;
+            }
+
             if let Some(ref expr) = opts.tags_expr
                 && !matches_tag_expr(expr, &fact.tags)
             {
@@ -622,6 +629,14 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
                     "{manual} {noun} no command — verify each against the code and state PASS or FAIL with a one-line reason."
                 )),
             );
+            if resolved_agent.is_none() {
+                println!(
+                    "{}",
+                    color::dim(
+                        "Use --agent to enable agent verification (e.g. facts check --agent claude)."
+                    ),
+                );
+            }
         }
     }
 

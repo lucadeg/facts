@@ -134,7 +134,15 @@ pub fn run(opts: &ListOptions) -> Result<bool> {
                 print_light_headings(&mut last_path, &path, any_output);
                 print_light_fact(fact, id);
             } else {
-                let display = format_fact_line(sheet, &path, id, &fact.label, &fact.tags, id_width);
+                let display = format_fact_line(
+                    sheet,
+                    &path,
+                    id,
+                    &fact.label,
+                    &fact.tags,
+                    fact.command.is_some(),
+                    id_width,
+                );
                 println!("{display}");
             }
             any_output = true;
@@ -216,7 +224,7 @@ fn light_tag_color(tag: &str) -> String {
 ///   "cli"        -> true  (matches cli and all children like cli/init)
 ///   "check"      -> false (not in this path)
 ///   "cli_tools"  -> false (must be exact segment match)
-fn section_matches(path_str: &str, filter: &str) -> bool {
+pub fn section_matches(path_str: &str, filter: &str) -> bool {
     let path_parts: Vec<&str> = path_str.split('/').collect();
     let filter_parts: Vec<&str> = filter.split('/').collect();
 
@@ -244,6 +252,7 @@ fn format_fact_line(
     id: &str,
     label: &str,
     tags: &[String],
+    has_command: bool,
     id_width: usize,
 ) -> String {
     let file_prefix = sheet.display_name();
@@ -256,7 +265,12 @@ fn format_fact_line(
     };
 
     let padded_id = format!("{:width$}", id, width = id_width);
-    let dim_id = color::dim(&padded_id);
+    let cmd_indicator = if has_command {
+        color::dim("✓")
+    } else {
+        color::dim("?")
+    };
+    let dim_id = format!("{} {cmd_indicator}", color::dim(&padded_id));
     let dim_sep = color::dim(">");
 
     let tag_suffix = if tags.is_empty() {

@@ -90,9 +90,11 @@ pub fn run_in(target_id: &str, root: &Path) -> Result<()> {
         println!("id: {explicit_id}");
     }
 
-    // Print command if present
+    // Print command if present, or indicate manual verification needed.
     if let Some(ref command) = fact.command {
         println!("command: {command}");
+    } else if !fact.is_config() {
+        println!("verification: manual (no command)");
     }
 
     // Print tags if present

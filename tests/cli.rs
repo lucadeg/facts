@@ -6442,3 +6442,229 @@ fn check_agent_fact_with_backslashes() {
         .success()
         .stdout(predicate::str::contains("(agent)"));
 }
+
+// ===========================================================================
+// check: --section filter
+// ===========================================================================
+
+#[test]
+fn check_section_filters_to_matching_section() {
+    let dir = project(
+        "# alpha\n\n- label: alpha fact\n  command: \"true\"\n\n# beta\n\n- label: beta fact\n  command: \"true\"\n",
+    );
+    facts_cmd(&dir)
+        .args(["check", "--section", "alpha"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("alpha fact"))
+        .stdout(predicate::str::contains("beta fact").not());
+}
+
+#[test]
+fn check_section_filters_nested() {
+    let dir = project(
+        "# cli\n\n## check\n\n- label: check fact\n  command: \"true\"\n\n## list\n\n- label: list fact\n  command: \"true\"\n",
+    );
+    facts_cmd(&dir)
+        .args(["check", "--section", "cli/check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("check fact"))
+        .stdout(predicate::str::contains("list fact").not());
+}
+
+#[test]
+fn check_section_includes_children() {
+    let dir = project(
+        "# cli\n\n- label: cli fact\n  command: \"true\"\n\n## check\n\n- label: check fact\n  command: \"true\"\n",
+    );
+    facts_cmd(&dir)
+        .args(["check", "--section", "cli"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cli fact"))
+        .stdout(predicate::str::contains("check fact"));
+}
+
+#[test]
+fn check_section_case_insensitive() {
+    let dir = project("# CLI\n\n- label: cli fact\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--section", "cli"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cli fact"));
+}
+
+#[test]
+fn check_section_no_match_shows_zero() {
+    let dir = project("# alpha\n\n- label: alpha fact\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--section", "nonexistent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 passed"));
+}
+
+#[test]
+fn check_section_composes_with_tags() {
+    let dir = project(
+        "# alpha\n\n- label: tagged fact @mvp\n  command: \"true\"\n- label: untagged fact\n  command: \"true\"\n",
+    );
+    facts_cmd(&dir)
+        .args(["check", "--section", "alpha", "--tags", "mvp"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tagged fact"))
+        .stdout(predicate::str::contains("untagged fact").not());
+}
+
+#[test]
+fn check_section_with_agent_filters_manual_facts() {
+    let dir = project("# alpha\n\n- alpha manual\n\n# beta\n\n- beta manual\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--section", "alpha", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("alpha manual"))
+        .stdout(predicate::str::contains("beta manual").not());
+}
+
+// ===========================================================================
+// check: agent hint for manual facts when no agent configured
+// ===========================================================================
+
+#[test]
+fn check_manual_facts_no_agent_shows_hint() {
+    let dir = project("- manual fact\n");
+    facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Use --agent to enable agent verification",
+        ));
+}
+
+#[test]
+fn check_manual_facts_with_agent_no_hint() {
+    let dir = project("- manual fact\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Use --agent").not());
+}
+
+#[test]
+fn check_no_manual_facts_no_hint() {
+    let dir = project("- label: command fact\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Use --agent").not());
+}
+
+#[test]
+fn check_hint_mentions_example() {
+    // The hint should include a concrete example command.
+    let dir = project("- manual fact\n");
+    facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("facts check --agent claude"));
+}
+
+// ===========================================================================
+// get: manual fact shows verification line
+// ===========================================================================
+
+#[test]
+fn get_manual_fact_shows_verification_manual() {
+    let dir = project("- a manual fact\n");
+    facts_cmd(&dir).args(["list"]).assert().success();
+    // Get the ID from list output
+    let output = facts_cmd(&dir).args(["list"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let id = stdout.split_whitespace().next().unwrap();
+    facts_cmd(&dir)
+        .args(["get", id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "verification: manual (no command)",
+        ));
+}
+
+#[test]
+fn get_command_fact_shows_command_not_verification() {
+    let dir = project("- label: tested fact\n  command: echo hello\n");
+    let output = facts_cmd(&dir).args(["list"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let id = stdout.split_whitespace().next().unwrap();
+    facts_cmd(&dir)
+        .args(["get", id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("command: echo hello"))
+        .stdout(predicate::str::contains("verification:").not());
+}
+
+#[test]
+fn get_config_fact_no_verification_line() {
+    let dir = project("- id: .config\n  label: facts configuration\n  agent: claude\n");
+    facts_cmd(&dir)
+        .args(["get", ".config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("verification:").not());
+}
+
+// ===========================================================================
+// list: command/manual indicators
+// ===========================================================================
+
+#[test]
+fn list_shows_command_indicator_for_command_facts() {
+    let dir = project("- label: cmd fact\n  command: \"true\"\n- manual fact\n");
+    let output = facts_cmd(&dir).args(["list"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Command fact line should contain the check indicator
+    let cmd_line = stdout.lines().find(|l| l.contains("cmd fact")).unwrap();
+    // Manual fact line should contain the question indicator
+    let manual_line = stdout.lines().find(|l| l.contains("manual fact")).unwrap();
+    // The indicators are in the ID column area. We strip ANSI to check.
+    let strip = |s: &str| {
+        let mut result = String::new();
+        let mut chars = s.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\x1b' {
+                while let Some(&c) = chars.peek() {
+                    chars.next();
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+        result
+    };
+    let cmd_plain = strip(cmd_line);
+    let manual_plain = strip(manual_line);
+    assert!(
+        cmd_plain.contains("✓"),
+        "command fact should have check indicator: {cmd_plain}"
+    );
+    assert!(
+        manual_plain.contains("?"),
+        "manual fact should have question indicator: {manual_plain}"
+    );
+}
