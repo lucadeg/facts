@@ -72,10 +72,12 @@ facts check --id abc                    # check a single fact by ID
 facts check --section cli/check         # check one section
 facts check --agent claude              # use an agent for manual facts
 facts check --no-agent                  # skip agent, manual facts stay as ?
+facts check --strict                    # fail on unverified manual facts (CI)
+facts check --strict --agent claude -q  # CI: verify everything, fail on gaps
 facts check -q                          # quiet: exit code only (for CI)
 facts check -v                          # verbose: show agent prompts and output
 ```
-`check` is your primary feedback loop. It lints the files first (aborting on structural errors), then runs every command-fact and reports pass/fail/manual. Run it often. Exit 0 means all command-facts pass; manual facts don't affect the exit code unless an agent verifies them and finds failures.
+`check` is your primary feedback loop. It lints the files first (aborting on structural errors), then runs every command-fact and reports pass/fail/manual. Run it often. Exit 0 means all command-facts pass; manual facts don't affect the exit code unless an agent verifies them and finds failures, or `--strict` is used (which treats any unverified manual fact as a failure).
 
 **Manual facts (`?` in output) are your responsibility.** They have no command — you verify them by reading the relevant code. For each `?` fact: read what it claims, check the code, then report PASS or FAIL with a one-line reason. Reporting "N manual" without checking each one is not acceptable — those facts exist because they describe behavior that matters.
 
@@ -172,6 +174,13 @@ Rules:
 **Flags:**
 - `--no-agent` — skip agent verification entirely, manual facts stay as `?`
 - `--id <ID>` — check only specific facts (repeatable, composes with all filters)
+- `--section "path"` — filter by section path (case-insensitive sub-path match, includes children)
+- `--tags "expr"` — boolean tag filter (e.g. `"ci and not draft"`)
+- `--search "expr"` — full-text search against section + label + tags
+- `--file "name"` — filter to a specific `.facts` file
+- `--depth N` — limit section nesting depth
+- `--timeout <secs>` — per-command and per-agent-batch timeout
+- `--strict` — treat unverified manual facts as failures (non-zero exit). Essential for CI pipelines that require every fact to be verified by command or agent
 - `--quiet` / `-q` — no output, exit code only (0 = all pass)
 - `--verbose` / `-v` — show agent prompts and raw output for debugging
 

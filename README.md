@@ -156,10 +156,19 @@ facts check --agent claude               # verify with a specific agent
 facts check --no-agent                   # command-facts only, skip agent
 facts check --id abc --agent claude      # verify one fact with the agent
 facts check --tags "mvp and not blocked" # filter by tag expression
+facts check --section api/auth           # filter by section path
+facts check --search "auth and rate"     # full-text search filter
+facts check --file api.facts             # filter to one file
+facts check --depth 2                    # limit section nesting depth
+facts check --timeout 30                 # per-command and per-batch timeout
+facts check --strict                     # fail on unverified manual facts (CI)
 facts check -q                           # quiet: exit code only (for CI)
 facts check -v                           # verbose: show agent prompts/output
 facts config set agent claude            # persistent agent for checks
 facts config set batch-size 5            # facts per agent batch
+facts config show                        # view all config
+facts config get agent                   # read a config value
+facts config rm agent                    # remove a config key
 facts add "claim" --section api          # add a fact
 facts at <id> spec                       # quick tag add (or use the full edit form)
 facts rt <id> draft                      # quick tag remove
