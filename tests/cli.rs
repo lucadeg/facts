@@ -8591,3 +8591,266 @@ fn full_user_journey_new_project() {
         .failure()
         .stdout(predicate::str::contains("--strict"));
 }
+
+// ===========================================================================
+// Lifecycle workflow with agent checks
+// ===========================================================================
+
+#[test]
+fn lifecycle_draft_to_spec_to_implemented_with_agent() {
+    // Full lifecycle: @draft -> @spec (agent check) -> @implemented (command check)
+    let dir = empty_project();
+
+    // 1. Init project
+    facts_cmd(&dir).arg("init").assert().success();
+
+    // 2. Add a @draft fact
+    let output = facts_cmd(&dir)
+        .args([
+            "add",
+            "users can log in",
+            "--section",
+            "auth",
+            "--tags",
+            "draft",
+        ])
+        .output()
+        .unwrap();
+    let id = String::from_utf8(output.stdout).unwrap().trim().to_string();
+    assert!(!id.is_empty());
+
+    // Verify it shows as @draft
+    facts_cmd(&dir)
+        .args(["list", "--tags", "draft"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("users can log in"))
+        .stdout(predicate::str::contains("@draft"));
+
+    // 3. Refine: @draft -> @spec
+    facts_cmd(&dir)
+        .args(["edit", &id, "--remove-tag", "draft", "--add-tag", "spec"])
+        .assert()
+        .success();
+
+    // Verify tag change
+    facts_cmd(&dir)
+        .args(["get", &id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("spec"))
+        .stdout(predicate::str::contains("draft").not());
+
+    // 4. Agent check on @spec facts only
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--tags", "spec", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(agent)"))
+        .stdout(predicate::str::contains("1 passed"));
+
+    // 5. Implement: @spec -> @implemented with command
+    facts_cmd(&dir)
+        .args([
+            "edit",
+            &id,
+            "--remove-tag",
+            "spec",
+            "--add-tag",
+            "implemented",
+            "--command",
+            "echo auth_module_works",
+        ])
+        .assert()
+        .success();
+
+    // 6. Command check on @implemented facts
+    facts_cmd(&dir)
+        .args(["check", "--tags", "implemented"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("echo auth_module_works"))
+        .stdout(predicate::str::contains("1 passed"));
+
+    // 7. Demote back: @implemented -> @draft + remove command
+    facts_cmd(&dir)
+        .args([
+            "edit",
+            &id,
+            "--remove-command",
+            "--remove-tag",
+            "implemented",
+            "--add-tag",
+            "draft",
+        ])
+        .assert()
+        .success();
+
+    // Verify demotion
+    facts_cmd(&dir)
+        .args(["get", &id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("manual (no command)"))
+        .stdout(predicate::str::contains("draft"));
+}
+
+#[test]
+fn lifecycle_strict_with_tag_filters() {
+    // --strict + --tags "spec" should fail if spec facts are manual (unverified)
+    let dir = project(
+        "- label: spec fact\n  tags: [spec]\n- label: impl fact\n  command: \"true\"\n  tags: [implemented]\n",
+    );
+
+    // Without --strict: exits 0 (manual facts don't affect exit code)
+    facts_cmd(&dir)
+        .args(["check", "--tags", "spec", "--no-agent"])
+        .assert()
+        .success();
+
+    // With --strict: exits non-zero (manual spec facts are unverified)
+    facts_cmd(&dir)
+        .args(["check", "--tags", "spec", "--strict", "--no-agent"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("--strict"));
+
+    // With --strict + agent that passes all: exits 0
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--tags", "spec", "--strict", "--agent", &template])
+        .assert()
+        .success();
+}
+
+#[test]
+fn lifecycle_agent_only_checks_filtered_facts() {
+    // When using --tags "spec", agent should only see spec facts, not others
+    let dir = project(
+        "- manual untagged\n- label: draft idea\n  tags: [draft]\n- label: spec requirement\n  tags: [spec]\n",
+    );
+
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+
+    // Only spec facts should be checked
+    facts_cmd(&dir)
+        .args(["check", "--tags", "spec", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("spec requirement"))
+        .stdout(predicate::str::contains("manual untagged").not())
+        .stdout(predicate::str::contains("draft idea").not());
+}
+
+#[test]
+fn lifecycle_all_filters_compose_with_agent() {
+    // --tags + --section + --agent + --verbose all compose correctly
+    let dir = project(
+        "# auth\n\n- label: auth spec\n  tags: [spec]\n\n# billing\n\n- label: billing spec\n  tags: [spec]\n",
+    );
+
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+
+    facts_cmd(&dir)
+        .args([
+            "check",
+            "--tags",
+            "spec",
+            "--section",
+            "auth",
+            "--agent",
+            &template,
+            "--verbose",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("auth spec"))
+        .stdout(predicate::str::contains("billing spec").not())
+        .stdout(predicate::str::contains("--- batch 1 prompt ---"));
+}
+
+#[test]
+fn lifecycle_demote_with_remove_command_and_add_tag() {
+    // Test single-command demotion: remove command + change tags
+    let dir = project("- label: verified claim\n  command: echo ok\n  tags: [implemented]\n");
+
+    let id = get_fact_id(&dir, "verified claim");
+
+    facts_cmd(&dir)
+        .args([
+            "edit",
+            &id,
+            "--remove-command",
+            "--remove-tag",
+            "implemented",
+            "--add-tag",
+            "draft",
+        ])
+        .assert()
+        .success();
+
+    // Verify it's now manual + draft
+    facts_cmd(&dir)
+        .args(["get", &id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("manual (no command)"))
+        .stdout(predicate::str::contains("draft"));
+
+    // Verify it appears in list --manual filter
+    facts_cmd(&dir)
+        .args(["list", "--manual"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("verified claim"));
+
+    // Verify it appears in list --tags "draft"
+    facts_cmd(&dir)
+        .args(["list", "--tags", "draft"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("verified claim"));
+}
+
+#[test]
+fn lifecycle_strict_section_agent_compose() {
+    // --strict + --section + --agent compose: agent verifies section-filtered spec facts
+    let dir = project("# api\n\n- api manual fact\n\n# ui\n\n- ui manual fact\n");
+
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+
+    // With agent: strict passes because agent verifies the manual facts
+    facts_cmd(&dir)
+        .args([
+            "check",
+            "--strict",
+            "--section",
+            "api",
+            "--agent",
+            &template,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("api manual fact"))
+        .stdout(predicate::str::contains("ui manual fact").not());
+}
+
+#[test]
+fn lifecycle_list_manual_filter_shows_agent_candidates() {
+    // --manual flag shows facts that would need agent verification
+    let dir = project("- manual one\n- label: cmd fact\n  command: echo ok\n- manual two\n");
+
+    facts_cmd(&dir)
+        .args(["list", "--manual"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("manual one"))
+        .stdout(predicate::str::contains("manual two"))
+        .stdout(predicate::str::contains("cmd fact").not());
+}

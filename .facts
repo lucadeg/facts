@@ -256,6 +256,9 @@
   command: grep -q "remove.tag\|remove_tag" src/edit.rs
 - label: --tags conflicts with --add-tag and --remove-tag
   command: grep -q "conflicts_with\|conflict" src/main.rs
+- label: --remove-command strips the validation command, converting the fact to manual
+  command: grep -q "remove_command" src/edit.rs && cargo run -- edit --help 2>&1 | grep -q "\-\-remove-command"
+  tags: [implemented]
 - preserves explicit id when changing other fields
 - when a plain string fact gains a command or id, it becomes a mapping
 - tags migrate from inline to tags key when fact becomes a mapping

@@ -172,6 +172,7 @@ facts config rm agent                    # remove a config key
 facts add "claim" --section api          # add a fact
 facts at <id> spec                       # quick tag add (or use the full edit form)
 facts rt <id> draft                      # quick tag remove
+facts edit <id> --remove-command         # convert to manual fact (remove command)
 facts remove <id>                        # remove a fact
 facts get <id>                           # look up a single fact
 facts move <id> --section new/path       # relocate a fact

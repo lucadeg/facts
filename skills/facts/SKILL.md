@@ -102,8 +102,10 @@ facts rt <id> "spec"                 # quick remove tag
 facts at <id> "spec" --new-id xyz    # extra flags still work
 facts edit <id> --label "corrected statement"
 facts edit <id> --command "new check command"
+facts edit <id> --remove-command            # convert back to manual fact
+facts edit <id> --remove-command --add-tag "draft"  # demote to manual + draft
 ```
-Prefer `at`/`rt` (or the long `--add-tag` / `--remove-tag` forms) over the full `--tags` replacement. The latter replaces all tags silently.
+Prefer `at`/`rt` (or the long `--add-tag` / `--remove-tag` forms) over the full `--tags` replacement. The latter replaces all tags silently. Use `--remove-command` to strip a validation command and convert a fact back to a manual fact (useful when demoting across the lifecycle).
 
 **Remove facts:**
 ```
