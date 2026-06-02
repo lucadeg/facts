@@ -9502,3 +9502,639 @@ fn check_strict_nonexistent_tags_filter_exits_zero() {
         "--strict with no matching facts should exit 0"
     );
 }
+
+// ===========================================================================
+// Comprehensive agent check acceptance test
+// ===========================================================================
+
+/// Definitive acceptance test for the entire agent check feature.
+///
+/// Exercises every aspect of agentic fact checking end-to-end in a single
+/// test: init, add facts (command/manual/tagged/sectioned), configure agent,
+/// run check with every flag combination, edit facts, filter checks, lint.
+#[test]
+fn acceptance_test_agent_check_feature() {
+    let dir = empty_project();
+
+    // -----------------------------------------------------------------------
+    // Phase 1: Project setup via `facts init`
+    // -----------------------------------------------------------------------
+    facts_cmd(&dir).arg("init").assert().success();
+    assert!(dir.path().join(".facts").exists());
+
+    // -----------------------------------------------------------------------
+    // Phase 2: Add facts with different configurations
+    // -----------------------------------------------------------------------
+
+    // 2a. Manual fact in "api" section, tagged @draft
+    let out = facts_cmd(&dir)
+        .args([
+            "add",
+            "all endpoints return JSON",
+            "--section",
+            "api",
+            "--tags",
+            "draft",
+        ])
+        .output()
+        .unwrap();
+    let manual_draft_id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    assert!(!manual_draft_id.is_empty(), "add should print the fact ID");
+
+    // 2b. Manual fact in "api" section, tagged @spec
+    let out = facts_cmd(&dir)
+        .args([
+            "add",
+            "rate limiting enforced at 100 req per min",
+            "--section",
+            "api",
+            "--tags",
+            "spec",
+        ])
+        .output()
+        .unwrap();
+    let manual_spec_id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+
+    // 2c. Command-based fact in "build" section, tagged @implemented
+    let out = facts_cmd(&dir)
+        .args([
+            "add",
+            "project compiles",
+            "--section",
+            "build",
+            "--command",
+            "echo compilation_ok",
+            "--tags",
+            "implemented",
+        ])
+        .output()
+        .unwrap();
+    let cmd_impl_id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+
+    // 2d. Command-based fact in "build" section, no tags
+    let out = facts_cmd(&dir)
+        .args([
+            "add",
+            "tests pass",
+            "--section",
+            "build",
+            "--command",
+            "echo tests_ok",
+        ])
+        .output()
+        .unwrap();
+    let _cmd_notag_id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+
+    // 2e. Manual fact in "deploy" section, tagged @spec
+    let out = facts_cmd(&dir)
+        .args([
+            "add",
+            "deploy pipeline runs in under 5 minutes",
+            "--section",
+            "deploy",
+            "--tags",
+            "spec",
+        ])
+        .output()
+        .unwrap();
+    let _manual_deploy_id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+
+    // 2f. Manual fact in preamble (no section), tagged @implemented
+    let out = facts_cmd(&dir)
+        .args([
+            "add",
+            "project uses semantic versioning",
+            "--tags",
+            "implemented",
+        ])
+        .output()
+        .unwrap();
+    let manual_preamble_id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+
+    // -----------------------------------------------------------------------
+    // Phase 3: Verify list shows indicators
+    // -----------------------------------------------------------------------
+    let out = facts_cmd(&dir).arg("list").output().unwrap();
+    let list_out = String::from_utf8(out.stdout).unwrap();
+    // Command facts have ✓ indicator, manual facts have ?
+    assert!(
+        list_out.contains("?"),
+        "list should show ? for manual facts"
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 4: Check without agent (--no-agent) — manual facts shown as manual
+    // -----------------------------------------------------------------------
+    let out = facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        out.status.success(),
+        "check --no-agent should exit 0 (manual facts don't fail without --strict)"
+    );
+    assert!(
+        stdout.contains("manual"),
+        "should show manual count in summary"
+    );
+    assert!(stdout.contains("2 passed"), "two command facts should pass");
+    // Agent hint is shown when manual facts exist and no agent was resolved
+    assert!(
+        stdout.contains("Use --agent"),
+        "should show agent hint when manual facts exist without agent"
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 5: Configure agent via `facts config set agent`
+    // -----------------------------------------------------------------------
+    // Use write_agent_script directly with unique names to avoid overwriting
+    let pass_script = write_agent_script(
+        &dir,
+        "pass_agent.sh",
+        r#"#!/bin/sh
+echo "$1" | grep -oP '\[\K[^\]]+' | while read -r id; do
+    echo "<fact-verdict id=\"$id\">PASS</fact-verdict>"
+done
+"#,
+    );
+    let agent_template = format!("{pass_script} %p");
+
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "claude"])
+        .assert()
+        .success();
+
+    // config show confirms
+    facts_cmd(&dir)
+        .args(["config", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("agent: claude"));
+
+    // -----------------------------------------------------------------------
+    // Phase 6: Check with mock agent (--agent template overrides .config)
+    // -----------------------------------------------------------------------
+    let out = facts_cmd(&dir)
+        .args(["check", "--agent", &agent_template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        out.status.success(),
+        "check --agent with pass_all should succeed. stdout:\n{stdout}"
+    );
+    // 5 manual facts (4 we added + 1 from init) pass via agent, 2 command facts pass via command
+    assert!(
+        stdout.contains("7 passed"),
+        "all 7 facts should pass (2 command + 5 agent). stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("(agent)"),
+        "agent-passed facts should show (agent) marker. stdout:\n{stdout}"
+    );
+    // Breakdown line should show the split
+    assert!(
+        stdout.contains("2 command"),
+        "breakdown should show command count. stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("5 agent"),
+        "breakdown should show agent count. stdout:\n{stdout}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 7: Check --strict --no-agent (fails on manual facts)
+    // -----------------------------------------------------------------------
+    let out = facts_cmd(&dir)
+        .args(["check", "--strict", "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        !out.status.success(),
+        "--strict --no-agent should fail because manual facts are unverified"
+    );
+    assert!(
+        stdout.contains("--strict"),
+        "should show --strict explanation. stdout:\n{stdout}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 8: Check --verbose --agent (shows prompt and output)
+    // -----------------------------------------------------------------------
+    let out = facts_cmd(&dir)
+        .args(["check", "--verbose", "--agent", &agent_template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(out.status.success(), "verbose agent check should pass");
+    assert!(
+        stdout.contains("batch 1 prompt"),
+        "--verbose should show batch prompt. stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("batch 1 output"),
+        "--verbose should show batch output. stdout:\n{stdout}"
+    );
+    // Prompt should contain fact labels
+    assert!(
+        stdout.contains("all endpoints return JSON"),
+        "prompt in verbose output should contain fact labels. stdout:\n{stdout}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 9: Check --quiet --agent (only exit code, no stdout)
+    // -----------------------------------------------------------------------
+    let out = facts_cmd(&dir)
+        .args(["check", "--quiet", "--agent", &agent_template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(out.status.success(), "--quiet agent check should pass");
+    assert!(
+        stdout.is_empty(),
+        "--quiet should produce no stdout output. got:\n{stdout}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 10: Edit facts — add/remove command, add/remove tags
+    // -----------------------------------------------------------------------
+
+    // 10a. Add a command to the manual @draft fact
+    facts_cmd(&dir)
+        .args([
+            "edit",
+            &manual_draft_id,
+            "--command",
+            "echo json_response_ok",
+        ])
+        .assert()
+        .success();
+
+    // Verify it now has a command
+    facts_cmd(&dir)
+        .args(["get", &manual_draft_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("command: echo json_response_ok"));
+
+    // 10b. Remove the command to convert back to manual
+    facts_cmd(&dir)
+        .args(["edit", &manual_draft_id, "--remove-command"])
+        .assert()
+        .success();
+
+    // Verify it's manual again
+    facts_cmd(&dir)
+        .args(["get", &manual_draft_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("manual (no command)"));
+
+    // 10c. Lifecycle tag transition: @draft -> @spec
+    facts_cmd(&dir)
+        .args([
+            "edit",
+            &manual_draft_id,
+            "--remove-tag",
+            "draft",
+            "--add-tag",
+            "spec",
+        ])
+        .assert()
+        .success();
+
+    facts_cmd(&dir)
+        .args(["get", &manual_draft_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("spec"))
+        .stdout(predicate::str::contains("draft").not());
+
+    // -----------------------------------------------------------------------
+    // Phase 11: Check --id <id> --agent (single fact agent check)
+    // -----------------------------------------------------------------------
+    let out = facts_cmd(&dir)
+        .args(["check", "--id", &manual_spec_id, "--agent", &agent_template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(out.status.success(), "single-fact agent check should pass");
+    assert!(
+        stdout.contains("1 passed"),
+        "--id should check exactly 1 fact. stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("(agent)"),
+        "single manual fact should be agent-verified. stdout:\n{stdout}"
+    );
+    // Other facts should not appear
+    assert!(
+        !stdout.contains("project compiles"),
+        "--id should filter to just the specified fact. stdout:\n{stdout}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 12: Check --section <s> --tags <t> --agent (filtered agent check)
+    // -----------------------------------------------------------------------
+    let out = facts_cmd(&dir)
+        .args([
+            "check",
+            "--section",
+            "api",
+            "--tags",
+            "spec",
+            "--agent",
+            &agent_template,
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        out.status.success(),
+        "filtered agent check should pass. stdout:\n{stdout}"
+    );
+    // Should match the 2 @spec facts in the api section (manual_draft_id was just
+    // changed to @spec, and manual_spec_id was already @spec)
+    assert!(
+        stdout.contains("2 passed"),
+        "should find 2 @spec facts in api section. stdout:\n{stdout}"
+    );
+    // Deploy section facts should NOT appear
+    assert!(
+        !stdout.contains("deploy pipeline"),
+        "deploy section should be filtered out. stdout:\n{stdout}"
+    );
+    // Build section command facts should NOT appear
+    assert!(
+        !stdout.contains("project compiles"),
+        "build section should be filtered out. stdout:\n{stdout}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 13: Check with fail agent
+    // -----------------------------------------------------------------------
+    let fail_script = write_agent_script(
+        &dir,
+        "fail_agent.sh",
+        r#"#!/bin/sh
+echo "$1" | grep -oP '\[\K[^\]]+' | while read -r id; do
+    echo "<fact-verdict id=\"$id\">FAIL not true</fact-verdict>"
+done
+"#,
+    );
+    let fail_template = format!("{fail_script} %p");
+
+    let out = facts_cmd(&dir)
+        .args(["check", "--id", &manual_spec_id, "--agent", &fail_template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        !out.status.success(),
+        "agent FAIL verdict should cause non-zero exit"
+    );
+    assert!(
+        stdout.contains("1 failed"),
+        "should report 1 failed. stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("not true"),
+        "should show failure reason from agent. stdout:\n{stdout}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 14: Check with silent agent (no verdicts = unresolved)
+    // -----------------------------------------------------------------------
+    let silent_script = write_agent_script(
+        &dir,
+        "silent_agent.sh",
+        "#!/bin/sh\necho 'I have no verdicts'\n",
+    );
+    let silent_template = format!("{silent_script} %p");
+
+    let out = facts_cmd(&dir)
+        .args([
+            "check",
+            "--id",
+            &manual_spec_id,
+            "--agent",
+            &silent_template,
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        !out.status.success(),
+        "unresolved facts should cause non-zero exit"
+    );
+    assert!(
+        stdout.contains("unresolved"),
+        "should show unresolved in summary. stdout:\n{stdout}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 15: Check with crashing agent (preserves partial verdicts)
+    // -----------------------------------------------------------------------
+    let crash_script = write_agent_script(&dir, "crash_agent.sh", "#!/bin/sh\nexit 1\n");
+    let crash_template = format!("{crash_script} %p");
+
+    let out = facts_cmd(&dir)
+        .args(["check", "--id", &manual_spec_id, "--agent", &crash_template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        !out.status.success(),
+        "crashing agent should cause non-zero exit"
+    );
+    assert!(
+        stdout.contains("unresolved"),
+        "crash with no verdicts should leave fact unresolved. stdout:\n{stdout}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 16: --has-command and --manual filter flags
+    // -----------------------------------------------------------------------
+
+    // --has-command: only command facts
+    let out = facts_cmd(&dir)
+        .args(["check", "--has-command", "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(out.status.success());
+    assert!(
+        stdout.contains("2 passed"),
+        "--has-command should find 2 command facts. stdout:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("manual"),
+        "--has-command should exclude manual facts from summary. stdout:\n{stdout}"
+    );
+
+    // --manual with agent: only manual facts via agent
+    let out = facts_cmd(&dir)
+        .args(["check", "--manual", "--agent", &agent_template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        out.status.success(),
+        "--manual --agent should pass. stdout:\n{stdout}"
+    );
+    // Should find 5 manual facts (draft->spec, spec, deploy, preamble, + 1 from init)
+    assert!(
+        stdout.contains("5 passed"),
+        "--manual should check only manual facts. stdout:\n{stdout}"
+    );
+    // No command results should appear
+    assert!(
+        !stdout.contains("echo compilation_ok"),
+        "--manual should skip command facts. stdout:\n{stdout}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 17: Multi-filter composition (--section + --tags + --agent + --verbose)
+    // -----------------------------------------------------------------------
+    let out = facts_cmd(&dir)
+        .args([
+            "check",
+            "--section",
+            "api",
+            "--tags",
+            "spec",
+            "--verbose",
+            "--agent",
+            &agent_template,
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        out.status.success(),
+        "multi-filter verbose agent check should pass"
+    );
+    assert!(
+        stdout.contains("batch 1 prompt"),
+        "verbose should show prompt even with filters. stdout:\n{stdout}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 18: Lint passes (no warnings from our well-formed facts)
+    // -----------------------------------------------------------------------
+    facts_cmd(&dir).arg("lint").assert().success();
+
+    // -----------------------------------------------------------------------
+    // Phase 19: Batch size control
+    // -----------------------------------------------------------------------
+    // Set batch-size to 1 via config, check multiple manual facts
+    facts_cmd(&dir)
+        .args(["config", "set", "batch-size", "1"])
+        .assert()
+        .success();
+
+    let out = facts_cmd(&dir)
+        .args(["check", "--manual", "--verbose", "--agent", &agent_template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(out.status.success());
+    // With batch-size=1 and 5 manual facts (4 added + 1 from init), should see 5 batches
+    assert!(
+        stdout.contains("5 batch"),
+        "batch-size 1 should create 5 batches for 5 manual facts. stdout:\n{stdout}"
+    );
+
+    // CLI --batch-size overrides config
+    let out = facts_cmd(&dir)
+        .args([
+            "check",
+            "--manual",
+            "--verbose",
+            "--batch-size",
+            "2",
+            "--agent",
+            &agent_template,
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(out.status.success());
+    assert!(
+        stdout.contains("3 batch"),
+        "--batch-size 2 with 5 manual facts should create 3 batches. stdout:\n{stdout}"
+    );
+
+    // Clean up batch-size config
+    facts_cmd(&dir)
+        .args(["config", "rm", "batch-size"])
+        .assert()
+        .success();
+
+    // -----------------------------------------------------------------------
+    // Phase 20: Strict mode with agent — all manual facts verified = exit 0
+    // -----------------------------------------------------------------------
+    let out = facts_cmd(&dir)
+        .args(["check", "--strict", "--agent", &agent_template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        out.status.success(),
+        "--strict with all facts verified should exit 0. stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("7 passed"),
+        "all 7 facts should pass. stdout:\n{stdout}"
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 21: Timeout flag does not break normal operation
+    // -----------------------------------------------------------------------
+    let out = facts_cmd(&dir)
+        .args(["check", "--timeout", "30", "--agent", &agent_template])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "--timeout with generous timeout should pass"
+    );
+
+    // -----------------------------------------------------------------------
+    // Phase 22: Final state verification
+    // -----------------------------------------------------------------------
+
+    // Get shows the correct state for each fact type
+    facts_cmd(&dir)
+        .args(["get", &manual_preamble_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("manual (no command)"))
+        .stdout(predicate::str::contains("implemented"));
+
+    facts_cmd(&dir)
+        .args(["get", &cmd_impl_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("command: echo compilation_ok"))
+        .stdout(predicate::str::contains("implemented"));
+
+    facts_cmd(&dir)
+        .args(["get", &manual_draft_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("manual (no command)"))
+        .stdout(predicate::str::contains("spec"));
+
+    // Config shows agent setting
+    facts_cmd(&dir)
+        .args(["config", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("agent: claude"));
+
+    // Final lint check — everything is well-formed
+    facts_cmd(&dir).arg("lint").assert().success();
+}
