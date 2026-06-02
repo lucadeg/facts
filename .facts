@@ -360,8 +360,8 @@
 
 ## skills
 
-- label: all skills are agent-agnostic
-  command: ! grep -rq "claude\|Claude Code" skills/*/SKILL.md
+- label: all skills are agent-agnostic (no Claude Code-specific instructions)
+  command: ! grep -rq "Claude Code" skills/*/SKILL.md
 - label: all installable via skills.sh
   command: test -f skills.sh
 - label: skill names use facts- prefix to avoid collision
@@ -823,6 +823,9 @@
   tags: [avcodes/facts,]
 - label: the core skill explicitly warns agents not to use npx facts
   command: grep -q 'never.*npx facts' skills/facts/SKILL.md
+- label: the facts skill documents agent verification: verdict XML format, presets, resolution chain, and config
+  command: grep -q "fact-verdict" skills/facts/SKILL.md && grep -q "Resolution chain" skills/facts/SKILL.md && grep -q "config set agent" skills/facts/SKILL.md
+  tags: [implemented]
 
 # domain
 - a FactSheet is a parsed .facts file containing an optional preamble and a list of Sections @implemented

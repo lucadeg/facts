@@ -68,10 +68,24 @@ facts list --light                      # or the alias: facts ll
 ```
 facts check
 facts check --tags "ci"
+facts check --id abc                    # check a single fact by ID
+facts check --section cli/check         # check one section
+facts check --agent claude              # use an agent for manual facts
+facts check --no-agent                  # skip agent, manual facts stay as ?
+facts check -q                          # quiet: exit code only (for CI)
+facts check -v                          # verbose: show agent prompts and output
 ```
-`check` is your primary feedback loop. It lints the files first (aborting on structural errors), then runs every command-fact and reports pass/fail/manual. Run it often. Exit 0 means all command-facts pass; manual facts don't affect the exit code.
+`check` is your primary feedback loop. It lints the files first (aborting on structural errors), then runs every command-fact and reports pass/fail/manual. Run it often. Exit 0 means all command-facts pass; manual facts don't affect the exit code unless an agent verifies them and finds failures.
 
 **Manual facts (`?` in output) are your responsibility.** They have no command — you verify them by reading the relevant code. For each `?` fact: read what it claims, check the code, then report PASS or FAIL with a one-line reason. Reporting "N manual" without checking each one is not acceptable — those facts exist because they describe behavior that matters.
+
+**Configure the project for agent verification:**
+```
+facts config set agent claude           # persist agent choice in .facts
+facts config set batch-size 5           # how many facts per agent call
+facts config show                       # see current config
+facts config rm agent                   # remove a config key
+```
 
 **Add facts:**
 ```
@@ -120,6 +134,46 @@ The lifecycle flows `@draft → @spec → @implemented`. Each companion skill ow
 **IDs:** Every fact gets a short ID (3+ chars) derived from its label hash. Stable as long as the label doesn't change. Use `--id` or `--new-id` to override.
 
 **Validation:** Commands run via `$SHELL` (fallback `sh`) in the project root. Exit 0 = fact holds. Write commands that are fast and idempotent — they run on every check.
+
+**Configuration:** The `.config` fact (explicit `id: .config`) stores project-level settings in the main `.facts` file. Known keys: `agent` (preset name or shell template), `batch-size` (facts per agent call). Manage via `facts config set/get/show/rm`.
+
+## Agent verification
+
+`facts check` can delegate manual facts (those without a command) to an AI agent for verification. The agent reads the codebase and reports whether each fact holds.
+
+**Resolution chain** (first match wins):
+1. `--agent` flag: `facts check --agent claude`
+2. `.config agent` key in `.facts` (set via `facts config set agent claude`)
+3. Auto-detection: scans PATH for known agent binaries in preset order
+
+**Presets:** `claude`, `codex`, `pi`, `droid`, `opencode`, `mi`. Each maps to a command template (e.g. `claude` becomes `claude -p %p`). Custom templates use `%p` as the prompt placeholder: `--agent "my-agent run %p"`.
+
+**How it works:**
+1. Command-facts run first (sequential, immediate output)
+2. Remaining manual facts are batched (default 10 per batch, configurable via `--batch-size` or `.config batch-size`)
+3. Each batch is sent to the agent as a single prompt with fact IDs and labels
+4. The agent's output is parsed for verdict XML tags
+
+**Verdict format** — when you ARE the agent being called, respond with one XML tag per fact:
+```xml
+<fact-verdict id="abc">PASS</fact-verdict>
+<fact-verdict id="def">FAIL the feature is missing from auth.rs</fact-verdict>
+```
+
+Rules:
+- Use `PASS` for facts that hold, `FAIL reason` for facts that don't
+- Include a one-line reason after FAIL
+- Emit one verdict per fact — do not skip any
+- The `id` attribute must match the fact ID from the prompt
+- Markdown fences and ANSI codes are stripped before parsing
+- If an ID appears multiple times, the last verdict wins
+- Facts with no matching verdict are reported as "unresolved" (treated as failures)
+
+**Flags:**
+- `--no-agent` — skip agent verification entirely, manual facts stay as `?`
+- `--id <ID>` — check only specific facts (repeatable, composes with all filters)
+- `--quiet` / `-q` — no output, exit code only (0 = all pass)
+- `--verbose` / `-v` — show agent prompts and raw output for debugging
 
 ## Writing good facts
 
