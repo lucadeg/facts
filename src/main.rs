@@ -217,6 +217,10 @@ enum Command {
         #[arg(long)]
         command: Option<String>,
 
+        /// Remove the validation command (convert to manual fact).
+        #[arg(long, name = "remove-command", conflicts_with = "command")]
+        remove_command: bool,
+
         /// New explicit ID.
         #[arg(long, name = "new-id")]
         new_id: Option<String>,
@@ -500,6 +504,7 @@ fn main() -> anyhow::Result<()> {
             ids,
             label,
             command,
+            remove_command,
             new_id,
             tags,
             add_tag,
@@ -521,6 +526,7 @@ fn main() -> anyhow::Result<()> {
                 target_ids: ids,
                 label,
                 command,
+                remove_command,
                 new_id,
                 tags,
                 add_tags,

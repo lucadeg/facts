@@ -19,6 +19,8 @@ pub struct EditOptions {
     pub label: Option<String>,
     /// New command (replaces existing).
     pub command: Option<String>,
+    /// Remove the command (convert to manual fact).
+    pub remove_command: bool,
     /// New explicit ID (replaces existing).
     pub new_id: Option<String>,
     /// New tags (replaces all existing).
@@ -191,7 +193,9 @@ fn apply_edits(fact: &mut Fact, opts: &EditOptions) {
         }
     }
 
-    if let Some(ref new_command) = opts.command {
+    if opts.remove_command {
+        fact.command = None;
+    } else if let Some(ref new_command) = opts.command {
         fact.command = Some(new_command.clone());
     }
 
@@ -224,6 +228,17 @@ fn apply_edits(fact: &mut Fact, opts: &EditOptions) {
         if needs_mapping {
             fact.is_plain = false;
         }
+    }
+
+    // --remove-command can demote a mapping back to plain when no other
+    // mapping-requiring fields remain (id, command, extra keys).
+    if opts.remove_command
+        && !fact.is_plain
+        && fact.command.is_none()
+        && fact.explicit_id.is_none()
+        && fact.extra.is_empty()
+    {
+        fact.is_plain = true;
     }
 }
 
@@ -267,6 +282,7 @@ mod tests {
             target_ids: vec![target_id],
             label: Some("new label".to_string()),
             command: None,
+            remove_command: false,
             new_id: None,
             tags: None,
             add_tags: None,
@@ -289,6 +305,7 @@ mod tests {
             target_ids: vec![target_id],
             label: None,
             command: Some("echo new".to_string()),
+            remove_command: false,
             new_id: None,
             tags: None,
             add_tags: None,
@@ -311,6 +328,7 @@ mod tests {
             target_ids: vec![target_id],
             label: None,
             command: None,
+            remove_command: false,
             new_id: None,
             tags: Some(vec!["new1".to_string(), "new2".to_string()]),
             add_tags: None,
@@ -333,6 +351,7 @@ mod tests {
             target_ids: vec![target_id],
             label: None,
             command: None,
+            remove_command: false,
             new_id: None,
             tags: None,
             add_tags: Some(vec!["new".to_string()]),
@@ -354,6 +373,7 @@ mod tests {
             target_ids: vec![target_id],
             label: None,
             command: None,
+            remove_command: false,
             new_id: None,
             tags: None,
             add_tags: Some(vec!["existing".to_string()]),
@@ -375,6 +395,7 @@ mod tests {
             target_ids: vec![target_id],
             label: None,
             command: None,
+            remove_command: false,
             new_id: None,
             tags: None,
             add_tags: None,
@@ -397,6 +418,7 @@ mod tests {
             target_ids: vec![target_id],
             label: None,
             command: None,
+            remove_command: false,
             new_id: None,
             tags: None,
             add_tags: Some(vec!["implemented".to_string()]),
@@ -418,6 +440,7 @@ mod tests {
             target_ids: vec![target_id],
             label: None,
             command: Some("echo check".to_string()),
+            remove_command: false,
             new_id: None,
             tags: None,
             add_tags: None,
@@ -441,6 +464,7 @@ mod tests {
             target_ids: vec![target_id],
             label: None,
             command: None,
+            remove_command: false,
             new_id: Some("myid".to_string()),
             tags: None,
             add_tags: None,
@@ -463,6 +487,7 @@ mod tests {
             target_ids: vec![target_id],
             label: Some("changed label".to_string()),
             command: None,
+            remove_command: false,
             new_id: None,
             tags: None,
             add_tags: None,
@@ -485,6 +510,7 @@ mod tests {
             target_ids: vec!["zzz".to_string()],
             label: Some("new".to_string()),
             command: None,
+            remove_command: false,
             new_id: None,
             tags: None,
             add_tags: None,
@@ -509,6 +535,7 @@ mod tests {
             target_ids: vec![second_id.clone()],
             label: None,
             command: None,
+            remove_command: false,
             new_id: Some(first_id.clone()),
             tags: None,
             add_tags: None,
@@ -562,6 +589,7 @@ mod tests {
             target_ids: vec![target_id],
             label: None,
             command: Some("echo check".to_string()),
+            remove_command: false,
             new_id: None,
             tags: None,
             add_tags: None,
@@ -587,6 +615,7 @@ mod tests {
             target_ids: vec![target_id],
             label: Some("edited fact".to_string()),
             command: None,
+            remove_command: false,
             new_id: None,
             tags: None,
             add_tags: None,
@@ -617,6 +646,7 @@ mod tests {
             target_ids: vec![target_id],
             label: Some("changed".to_string()),
             command: None,
+            remove_command: false,
             new_id: None,
             tags: None,
             add_tags: None,
@@ -662,6 +692,7 @@ mod tests {
             target_ids: vec![id1, id2],
             label: None,
             command: None,
+            remove_command: false,
             new_id: None,
             tags: None,
             add_tags: Some(vec!["shared".to_string()]),
@@ -689,5 +720,107 @@ mod tests {
 
         let rw = fs::Permissions::from_mode(0o644);
         fs::set_permissions(&other_path, rw).unwrap();
+    }
+
+    #[test]
+    fn test_remove_command() {
+        let content = "- label: fact with cmd\n  command: echo check\n";
+        let (dir, facts_path) = setup_test_dir(content);
+
+        let target_id = find_id_for_label(content, "fact with cmd");
+        let opts = EditOptions {
+            target_ids: vec![target_id],
+            label: None,
+            command: None,
+            remove_command: true,
+            new_id: None,
+            tags: None,
+            add_tags: None,
+            remove_tags: None,
+        };
+        run_in(&opts, dir.path()).unwrap();
+
+        let result = fs::read_to_string(&facts_path).unwrap();
+        assert!(!result.contains("command:"), "command should be removed");
+        assert!(
+            result.contains("fact with cmd"),
+            "label should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_remove_command_demotes_to_plain() {
+        let content = "- label: plain candidate\n  command: echo check\n";
+        let (dir, facts_path) = setup_test_dir(content);
+
+        let target_id = find_id_for_label(content, "plain candidate");
+        let opts = EditOptions {
+            target_ids: vec![target_id],
+            label: None,
+            command: None,
+            remove_command: true,
+            new_id: None,
+            tags: None,
+            add_tags: None,
+            remove_tags: None,
+        };
+        run_in(&opts, dir.path()).unwrap();
+
+        let result = fs::read_to_string(&facts_path).unwrap();
+        assert!(
+            result.contains("- plain candidate"),
+            "should be plain format: {result}"
+        );
+    }
+
+    #[test]
+    fn test_remove_command_keeps_mapping_when_has_id() {
+        let content = "- label: keep mapping\n  id: keep\n  command: echo check\n";
+        let (dir, facts_path) = setup_test_dir(content);
+
+        let opts = EditOptions {
+            target_ids: vec!["keep".to_string()],
+            label: None,
+            command: None,
+            remove_command: true,
+            new_id: None,
+            tags: None,
+            add_tags: None,
+            remove_tags: None,
+        };
+        run_in(&opts, dir.path()).unwrap();
+
+        let result = fs::read_to_string(&facts_path).unwrap();
+        assert!(
+            result.contains("label: keep mapping"),
+            "should stay as mapping: {result}"
+        );
+        assert!(result.contains("id: keep"), "should keep explicit ID");
+        assert!(!result.contains("command:"), "command should be removed");
+    }
+
+    #[test]
+    fn test_remove_command_noop_on_manual_fact() {
+        let content = "- manual fact\n";
+        let (dir, facts_path) = setup_test_dir(content);
+
+        let target_id = find_id_for_label(content, "manual fact");
+        let opts = EditOptions {
+            target_ids: vec![target_id],
+            label: None,
+            command: None,
+            remove_command: true,
+            new_id: None,
+            tags: None,
+            add_tags: None,
+            remove_tags: None,
+        };
+        run_in(&opts, dir.path()).unwrap();
+
+        let result = fs::read_to_string(&facts_path).unwrap();
+        assert!(
+            result.contains("- manual fact"),
+            "should remain unchanged: {result}"
+        );
     }
 }

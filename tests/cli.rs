@@ -39,6 +39,19 @@ fn facts_cmd(dir: &TempDir) -> Command {
     cmd
 }
 
+/// Get the auto-generated fact ID for a fact with the given label.
+fn get_fact_id(dir: &TempDir, label: &str) -> String {
+    let output = facts_cmd(dir).arg("list").output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for line in stdout.lines() {
+        if line.contains(label) {
+            // ID is the first whitespace-separated token
+            return line.trim().split_whitespace().next().unwrap().to_string();
+        }
+    }
+    panic!("no fact with label '{label}' found in list output:\n{stdout}");
+}
+
 // ===========================================================================
 // list
 // ===========================================================================
@@ -8292,4 +8305,289 @@ fn check_fact_with_fail_as_explicit_id() {
         .assert()
         .success()
         .stdout(predicate::str::contains("1 passed"));
+}
+
+// ===========================================================================
+// edit --remove-command
+// ===========================================================================
+
+#[test]
+fn edit_remove_command_converts_to_manual() {
+    let dir = project("- label: has command\n  command: echo ok\n");
+    let id = get_fact_id(&dir, "has command");
+
+    facts_cmd(&dir)
+        .args(["edit", &id, "--remove-command"])
+        .assert()
+        .success();
+
+    // Verify the fact is now manual
+    facts_cmd(&dir)
+        .args(["get", &id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("manual (no command)"));
+
+    // Verify it shows ? in list
+    facts_cmd(&dir)
+        .args(["list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("?"));
+}
+
+#[test]
+fn edit_remove_command_on_manual_fact_is_noop() {
+    let dir = project("- a manual fact\n");
+    let id = get_fact_id(&dir, "a manual fact");
+
+    facts_cmd(&dir)
+        .args(["edit", &id, "--remove-command"])
+        .assert()
+        .success();
+
+    // Still manual
+    facts_cmd(&dir)
+        .args(["get", &id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("manual (no command)"));
+}
+
+#[test]
+fn edit_remove_command_conflicts_with_command() {
+    let dir = project("- label: has command\n  command: echo ok\n");
+    let id = get_fact_id(&dir, "has command");
+
+    facts_cmd(&dir)
+        .args(["edit", &id, "--remove-command", "--command", "echo new"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn edit_remove_command_preserves_tags() {
+    let dir = project("- label: tagged cmd\n  command: echo ok\n  tags: [mvp, core]\n");
+    let id = get_fact_id(&dir, "tagged cmd");
+
+    facts_cmd(&dir)
+        .args(["edit", &id, "--remove-command"])
+        .assert()
+        .success();
+
+    facts_cmd(&dir)
+        .args(["get", &id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tags: [mvp, core]"))
+        .stdout(predicate::str::contains("manual (no command)"));
+}
+
+#[test]
+fn edit_remove_command_preserves_explicit_id() {
+    let dir = project("- label: has id\n  id: myid\n  command: echo ok\n");
+
+    facts_cmd(&dir)
+        .args(["edit", "myid", "--remove-command"])
+        .assert()
+        .success();
+
+    facts_cmd(&dir)
+        .args(["get", "myid"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("manual (no command)"));
+
+    // The fact should still be addressable by its explicit ID
+    let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert!(content.contains("id: myid"));
+}
+
+#[test]
+fn edit_remove_command_demotes_to_plain_when_no_mapping_fields() {
+    let dir = project("- label: only command\n  command: echo ok\n");
+    let id = get_fact_id(&dir, "only command");
+
+    facts_cmd(&dir)
+        .args(["edit", &id, "--remove-command"])
+        .assert()
+        .success();
+
+    // Should be demoted to plain format (no "label:" prefix)
+    let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert!(
+        content.contains("- only command"),
+        "expected plain format, got: {content}"
+    );
+    assert!(
+        !content.contains("label: only command"),
+        "should not be mapping format: {content}"
+    );
+}
+
+// ===========================================================================
+// config set strips init hint
+// ===========================================================================
+
+#[test]
+fn config_set_strips_init_hint() {
+    let dir = empty_project();
+
+    // Init creates the hint
+    facts_cmd(&dir).arg("init").assert().success();
+
+    let before = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert!(
+        before.contains("# To enable agent verification"),
+        "init should create hint"
+    );
+
+    // config set should strip it
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "claude"])
+        .assert()
+        .success();
+
+    let after = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert!(
+        !after.contains("# To enable agent verification"),
+        "hint should be stripped"
+    );
+    assert!(after.contains("agent: claude"), "config should be set");
+    assert!(
+        after.contains("# project"),
+        "original sections should remain"
+    );
+}
+
+#[test]
+fn config_set_on_existing_config_does_not_strip_sections() {
+    let dir = project(
+        "- label: facts configuration\n  id: .config\n  agent: codex\n\n# build\n\n- builds ok\n",
+    );
+
+    // Updating existing config should not strip anything
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "claude"])
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+    assert!(content.contains("agent: claude"));
+    assert!(content.contains("# build"));
+    assert!(content.contains("builds ok"));
+}
+
+// ===========================================================================
+// Full user journey: init -> add -> config -> check -> edit
+// ===========================================================================
+
+#[test]
+fn full_user_journey_new_project() {
+    let dir = empty_project();
+
+    // 1. init
+    facts_cmd(&dir).arg("init").assert().success();
+    assert!(dir.path().join(".facts").exists());
+
+    // 2. add manual fact
+    let output = facts_cmd(&dir)
+        .args(["add", "the API returns JSON", "--section", "api"])
+        .output()
+        .unwrap();
+    let api_id = String::from_utf8(output.stdout).unwrap().trim().to_string();
+    assert!(!api_id.is_empty());
+
+    // 3. add command fact
+    let output = facts_cmd(&dir)
+        .args([
+            "add",
+            "echo works",
+            "--section",
+            "build",
+            "--command",
+            "echo passing",
+        ])
+        .output()
+        .unwrap();
+    let cmd_id = String::from_utf8(output.stdout).unwrap().trim().to_string();
+
+    // 4. list shows indicators
+    facts_cmd(&dir)
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("?")) // manual
+        .stdout(predicate::str::contains("\u{2713}")); // ✓ command
+
+    // 5. check without agent
+    facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("manual"));
+
+    // 6. config set
+    facts_cmd(&dir)
+        .args(["config", "set", "agent", "claude"])
+        .assert()
+        .success();
+
+    // 7. config show
+    facts_cmd(&dir)
+        .args(["config", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("agent: claude"));
+
+    // 8. check --id on command fact
+    facts_cmd(&dir)
+        .args(["check", "--id", &cmd_id, "--no-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 passed"));
+
+    // 9. edit: add command to manual fact
+    facts_cmd(&dir)
+        .args(["edit", &api_id, "--command", "echo json_ok"])
+        .assert()
+        .success();
+
+    facts_cmd(&dir)
+        .args(["get", &api_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("command: echo json_ok"));
+
+    // 10. edit: remove command
+    facts_cmd(&dir)
+        .args(["edit", &api_id, "--remove-command"])
+        .assert()
+        .success();
+
+    facts_cmd(&dir)
+        .args(["get", &api_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("manual (no command)"));
+
+    // 11. edit: add tags
+    facts_cmd(&dir)
+        .args(["edit", &api_id, "--add-tag", "spec"])
+        .assert()
+        .success();
+
+    facts_cmd(&dir)
+        .args(["get", &api_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("spec"));
+
+    // 12. strict mode
+    facts_cmd(&dir)
+        .args(["check", "--strict", "--no-agent"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("--strict"));
 }

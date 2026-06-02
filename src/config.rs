@@ -105,6 +105,10 @@ fn config_set(root: &Path, key: &str, value: &str) -> Result<()> {
             fact.raw = writer::fact_to_raw(fact);
         }
         None => {
+            // Strip the commented config hint from `facts init` if present,
+            // since the user is now creating a real .config.
+            strip_config_hint(&mut sheet);
+
             let mut fact = Fact {
                 explicit_id: Some(CONFIG_ID.to_string()),
                 label: CONFIG_LABEL.to_string(),
@@ -210,6 +214,22 @@ fn find_config_fact(root: &Path) -> Result<(FactSheet, Fact)> {
         }
     }
     anyhow::bail!("no .config fact found");
+}
+
+/// Strip the `facts init` config hint sections from a sheet.
+///
+/// The commented-out config example (`# To enable agent verification...`)
+/// gets parsed as section headings. When the user creates a real `.config`
+/// via `config set`, these stale hint sections become confusing. Remove them.
+fn strip_config_hint(sheet: &mut FactSheet) {
+    sheet.sections.retain(|s| {
+        !s.title.starts_with("To enable agent verification")
+            && !s.title.starts_with("- label: facts configuration")
+            && !s.title.starts_with("id: .config")
+            && !s.title.starts_with("agent:")
+            && !s.title.starts_with("batch-size:")
+            && !s.title.starts_with("Or run: facts config set")
+    });
 }
 
 fn find_config_location(sheet: &FactSheet) -> Option<FactLocation> {
@@ -448,5 +468,98 @@ mod tests {
         assert!(content.contains(".config"));
         assert!(content.contains("batch-size: 5"));
         assert!(!content.contains("agent"));
+    }
+
+    #[test]
+    fn test_config_set_strips_init_hint_on_first_config() {
+        let hint = "# To enable agent verification of manual facts, uncomment and edit:\n\
+                     # - label: facts configuration\n\
+                     #   id: .config\n\
+                     #   agent: claude\n\
+                     #   batch-size: 10\n\
+                     # Or run: facts config set agent claude\n\n\
+                     # project\n\n\
+                     - project ready\n";
+        let dir = setup_test_dir(hint);
+
+        run_in(
+            &ConfigAction::Set {
+                key: "agent".to_string(),
+                value: "claude".to_string(),
+            },
+            dir.path(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+        assert!(content.contains("id: .config"), "should have .config");
+        assert!(content.contains("agent: claude"), "should have agent");
+        assert!(
+            !content.contains("# To enable agent verification"),
+            "hint should be stripped: {content}"
+        );
+        assert!(
+            content.contains("# project"),
+            "real sections should remain: {content}"
+        );
+    }
+
+    #[test]
+    fn test_config_set_does_not_strip_hint_when_config_exists() {
+        // When .config already exists, don't strip (that branch is not taken)
+        let content_with_config = "- id: .config\n  label: facts configuration\n  agent: codex\n\n\
+                                   # To enable agent verification of manual facts, uncomment and edit:\n\n\
+                                   # project\n\n- fact\n";
+        let dir = setup_test_dir(content_with_config);
+
+        run_in(
+            &ConfigAction::Set {
+                key: "agent".to_string(),
+                value: "claude".to_string(),
+            },
+            dir.path(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(dir.path().join(".facts")).unwrap();
+        assert!(content.contains("agent: claude"));
+        // Hint line is a section heading — it is not stripped on update path
+        assert!(content.contains("To enable agent verification"));
+    }
+
+    #[test]
+    fn test_strip_config_hint_removes_hint_sections() {
+        let hint = "# To enable agent verification of manual facts, uncomment and edit:\n\
+                     # - label: facts configuration\n\
+                     #   id: .config\n\
+                     #   agent: claude\n\
+                     #   batch-size: 10\n\
+                     # Or run: facts config set agent claude\n\n\
+                     # project\n\n\
+                     - project ready\n";
+        let mut sheet = parser::parse(hint, ".facts").unwrap();
+
+        let before_count = sheet.sections.len();
+        strip_config_hint(&mut sheet);
+        let after_count = sheet.sections.len();
+
+        assert!(
+            after_count < before_count,
+            "should have removed some sections"
+        );
+        // The "project" section should remain
+        assert!(sheet.sections.iter().any(|s| s.title == "project"));
+    }
+
+    #[test]
+    fn test_strip_config_hint_noop_without_hint() {
+        let content = "# project\n\n- fact one\n";
+        let mut sheet = parser::parse(content, ".facts").unwrap();
+
+        let before_count = sheet.sections.len();
+        strip_config_hint(&mut sheet);
+        let after_count = sheet.sections.len();
+
+        assert_eq!(before_count, after_count, "should not remove any sections");
     }
 }

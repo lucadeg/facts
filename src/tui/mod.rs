@@ -920,6 +920,7 @@ impl App {
                     } else {
                         Some(command_val)
                     },
+                    remove_command: false,
                     new_id: if new_id_val.is_empty() {
                         None
                     } else {
