@@ -1152,8 +1152,12 @@ impl App {
             while let Ok((idx, status)) = rx.try_recv() {
                 let prev = self.check_results.get(&idx);
                 match prev {
-                    Some(CheckResult::Manual) => self.check_manual -= 1,
-                    Some(CheckResult::AgentUnresolved) => self.check_unresolved -= 1,
+                    Some(CheckResult::Manual) => {
+                        self.check_manual = self.check_manual.saturating_sub(1)
+                    }
+                    Some(CheckResult::AgentUnresolved) => {
+                        self.check_unresolved = self.check_unresolved.saturating_sub(1)
+                    }
                     _ => {}
                 }
                 match &status {

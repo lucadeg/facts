@@ -385,6 +385,10 @@ fn run_agent_with_timeout(
                 if start.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
+                    // Note: we cannot safely drain stdout/stderr here because
+                    // child processes may still hold the pipe open, causing
+                    // read_to_string to block indefinitely. Any partial verdicts
+                    // emitted before the timeout are lost.
                     return Err(format!("agent timed out after {}s", timeout.as_secs()));
                 }
                 std::thread::sleep(poll_interval);
