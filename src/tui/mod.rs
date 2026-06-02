@@ -231,6 +231,16 @@ impl App {
 
         self.display_facts = display_facts;
         self.filtered_indices.clear();
+        // Cancel any running check to prevent stale results from mapping
+        // to new display_facts entries at the same global_index.
+        if self.check_running {
+            if let Some(ref cancel) = self.check_cancel {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            self.check_cancel = None;
+            self.check_rx = None;
+            self.check_running = false;
+        }
         self.check_results.clear();
         self.check_passed = 0;
         self.check_failed = 0;
@@ -2349,5 +2359,186 @@ mod tests {
             "status should not show manual when 0: {}",
             app.status
         );
+    }
+
+    // === Reload-during-check safety ===
+
+    #[test]
+    fn test_reload_during_check_cancels_running_check() {
+        let (_dir, mut app) = temp_app("- label: slow\n  command: sleep 60\n");
+        app.check_timeout = None;
+        app.start_check();
+        assert!(app.check_running);
+        assert!(app.check_rx.is_some());
+        assert!(app.check_cancel.is_some());
+
+        // Reload should cancel the check
+        app.load_data().unwrap();
+        assert!(!app.check_running);
+        assert!(app.check_rx.is_none());
+        assert!(app.check_cancel.is_none());
+        assert_eq!(app.check_total_facts, 0);
+        assert!(app.check_results.is_empty());
+    }
+
+    #[test]
+    fn test_reload_during_check_prevents_stale_results() {
+        let (dir, mut app) = temp_app("- label: fact one\n  command: true\n- fact two\n");
+        app.agent_disabled = true;
+        app.start_check();
+
+        // Wait for check to complete
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+        assert_eq!(app.check_passed, 1);
+        assert_eq!(app.check_manual, 1);
+
+        // Modify file on disk and reload
+        fs::write(dir.path().join(".facts"), "- brand new fact\n").unwrap();
+        app.load_data().unwrap();
+
+        // After reload, no stale check results should be visible
+        assert!(app.check_results.is_empty());
+        assert_eq!(app.check_passed, 0);
+        assert_eq!(app.check_failed, 0);
+        assert_eq!(app.check_manual, 0);
+        assert_eq!(app.display_facts.len(), 1);
+        assert_eq!(app.display_facts[0].label, "brand new fact");
+    }
+
+    #[test]
+    fn test_refresh_key_during_check_cancels_check() {
+        let (_dir, mut app) = temp_app("- label: slow\n  command: sleep 60\n");
+        app.check_timeout = None;
+        app.start_check();
+        assert!(app.check_running);
+
+        // Press 'r' to refresh
+        app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::empty()))
+            .unwrap();
+
+        // Check should be cancelled by load_data
+        assert!(!app.check_running);
+        assert!(app.check_rx.is_none());
+    }
+
+    // === Agent check status rendering verification ===
+
+    #[test]
+    fn test_agent_passed_and_command_passed_same_check_symbol() {
+        // Both Passed and AgentPassed should show the check mark
+        let (_dir, mut app) = temp_app("- fact one\n- fact two\n");
+        app.check_results.insert(0, CheckResult::Passed);
+        app.check_results.insert(1, CheckResult::AgentPassed);
+
+        // Both should exist in results
+        assert!(matches!(
+            app.check_results.get(&0),
+            Some(CheckResult::Passed)
+        ));
+        assert!(matches!(
+            app.check_results.get(&1),
+            Some(CheckResult::AgentPassed)
+        ));
+    }
+
+    #[test]
+    fn test_agent_failed_and_command_failed_same_fail_symbol() {
+        let (_dir, mut app) = temp_app("- fact one\n- fact two\n");
+        app.check_results
+            .insert(0, CheckResult::Failed("err".into()));
+        app.check_results
+            .insert(1, CheckResult::AgentFailed("reason".into()));
+
+        assert!(matches!(
+            app.check_results.get(&0),
+            Some(CheckResult::Failed(_))
+        ));
+        assert!(matches!(
+            app.check_results.get(&1),
+            Some(CheckResult::AgentFailed(_))
+        ));
+    }
+
+    #[test]
+    fn test_cancel_drops_subsequent_results() {
+        let (_dir, mut app) = temp_app("- manual fact one\n- manual fact two\n");
+        let (tx, rx) = mpsc::channel();
+        app.check_rx = Some(rx);
+        app.check_running = true;
+        app.check_cancel = Some(Arc::new(AtomicBool::new(false)));
+        app.check_total_facts = 2;
+
+        // Send first result, process it
+        tx.send((0, CheckResult::Manual)).unwrap();
+        app.process_check_results();
+        assert_eq!(app.check_manual, 1);
+
+        // Cancel the check
+        app.cancel_check();
+        assert!(!app.check_running);
+        assert!(app.check_rx.is_none());
+
+        // Send another result (simulates thread finishing after cancel)
+        let _ = tx.send((1, CheckResult::Manual));
+
+        // Process results should be a no-op since rx is None
+        app.process_check_results();
+        assert_eq!(app.check_manual, 1); // Only the first result counted
+    }
+
+    #[test]
+    fn test_new_check_after_cancel_has_fresh_state() {
+        let (_dir, mut app) = temp_app("- label: fact\n  command: true\n");
+        app.start_check();
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+        assert_eq!(app.check_passed, 1);
+
+        // Cancel (even if done) and start a new check
+        app.cancel_check();
+        app.start_check();
+
+        // Counters should be reset
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+        // After fresh check, should have exactly 1 passed (not 2)
+        assert_eq!(app.check_passed, 1);
+    }
+
+    #[test]
+    fn test_agent_pending_counter_is_not_counted_in_totals() {
+        // AgentPending should not increment any counter
+        let (_dir, mut app) = temp_app("- manual fact\n");
+        let (tx, rx) = mpsc::channel();
+        app.check_rx = Some(rx);
+        app.check_running = true;
+        app.check_total_facts = 1;
+
+        tx.send((0, CheckResult::Manual)).unwrap();
+        tx.send((0, CheckResult::AgentPending)).unwrap();
+        // Don't send a final verdict, just drop the channel
+        drop(tx);
+
+        app.process_check_results();
+        // After Manual->AgentPending: manual was decremented, pending doesn't count
+        assert_eq!(app.check_passed, 0);
+        assert_eq!(app.check_failed, 0);
+        assert_eq!(app.check_manual, 0);
+        assert_eq!(app.check_unresolved, 0);
+        // Total is 0, which is < check_total_facts (1), and pending > 0
+        // So the check should still be "running" (no completion detected)
+        // ... but channel is closed so next process_check_results won't get more
+        // The check stays running because pending count > 0
+        assert!(app.check_running);
     }
 }

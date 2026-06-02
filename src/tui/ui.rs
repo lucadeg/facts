@@ -1309,4 +1309,47 @@ mod tests {
         app.filter_field = 2;
         assert_eq!(filter_prefix_width(&app), 9); // " /" + 4 + "  #"
     }
+
+    // === Agent check shortcut rendering ===
+
+    #[test]
+    fn test_shortcut_shows_check_all_when_not_running() {
+        let (_dir, app) = temp_app("- first\n- second\n");
+        assert!(!app.check_running);
+        let items = shortcut_items_for_mode(&app);
+        assert!(
+            items.iter().any(|(k, l)| *k == "c" && *l == "check all"),
+            "should show 'c check all' when not running"
+        );
+        assert!(
+            !items.iter().any(|(k, _)| *k == "C"),
+            "should not show 'C cancel' when not running"
+        );
+    }
+
+    #[test]
+    fn test_shortcut_shows_cancel_when_check_running() {
+        let (_dir, mut app) = temp_app("- first\n- second\n");
+        app.check_running = true;
+        let items = shortcut_items_for_mode(&app);
+        assert!(
+            items.iter().any(|(k, l)| *k == "C" && *l == "cancel"),
+            "should show 'C cancel' when running"
+        );
+        assert!(
+            !items.iter().any(|(k, l)| *k == "c" && *l == "check all"),
+            "should not show 'c check all' when running"
+        );
+    }
+
+    #[test]
+    fn test_shortcut_detail_mode_has_check_key() {
+        let (_dir, mut app) = temp_app("- first\n");
+        app.mode = Mode::Detail;
+        let items = shortcut_items_for_mode(&app);
+        assert!(
+            items.iter().any(|(k, l)| *k == "x" && *l == "check"),
+            "detail mode should show 'x check'"
+        );
+    }
 }
