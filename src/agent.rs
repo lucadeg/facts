@@ -797,6 +797,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_shell_escape_complex_injection_attempt() {
         // An adversarial fact label trying to break out of single quotes.
         // Verify that shell_escape produces a string that, when evaluated by sh,
@@ -895,6 +896,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_run_batch_empty_facts() {
         // Empty batch should return immediately, not invoke the agent.
         let result = run_batch("nonexistent-agent %p", &[], Path::new("."), None);
@@ -903,6 +905,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_which_exists_detects_sh() {
         // /bin/sh should always exist on Unix-like systems.
         assert!(which_exists("sh"), "sh should be found on PATH");
@@ -1249,6 +1252,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_template_without_percent_p_appends_prompt() {
         // When template has no %p, the escaped prompt should be appended.
         // We test this indirectly by running a simple echo command.
@@ -1534,6 +1538,7 @@ mod tests {
     // =========================================================================
 
     #[test]
+    #[cfg(unix)]
     fn test_run_batch_crash_preserves_verdicts() {
         // Agent that emits a PASS verdict then exits non-zero.
         // The PASS verdict should be preserved, the other fact unresolved.
@@ -1579,6 +1584,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_run_batch_crash_no_verdicts_all_unresolved() {
         // Agent crashes without emitting any verdicts. All facts should be unresolved.
         let facts = vec![ManualFact {
@@ -1593,6 +1599,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_run_batch_success_no_output_all_unresolved() {
         // Agent exits 0 with no output. All facts should be unresolved (no error).
         let facts = vec![
@@ -1620,6 +1627,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_run_batch_stderr_with_success() {
         // Agent prints to stderr but exits 0 with valid verdicts.
         // The verdict should be parsed from stdout, and stderr should appear in raw_output.
