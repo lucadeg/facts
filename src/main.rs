@@ -107,6 +107,14 @@ enum Command {
         #[arg(long)]
         section: Option<String>,
 
+        /// Check only facts with a validation command (skip manual facts).
+        #[arg(long)]
+        has_command: bool,
+
+        /// Check only manual facts (no validation command). Useful with --agent.
+        #[arg(long)]
+        manual: bool,
+
         /// Boolean tag filter expression (e.g. "mvp and not blocked").
         #[arg(long)]
         tags: Option<String>,
@@ -432,6 +440,8 @@ fn main() -> anyhow::Result<()> {
             file,
             id,
             section,
+            has_command,
+            manual,
             tags,
             search,
             depth,
@@ -447,6 +457,8 @@ fn main() -> anyhow::Result<()> {
                 file_filter: file,
                 id_filter: if id.is_empty() { None } else { Some(id) },
                 section_filter: section,
+                has_command,
+                manual,
                 tags_expr: tags,
                 search_expr: search,
                 depth,

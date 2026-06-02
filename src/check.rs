@@ -20,6 +20,8 @@ pub struct CheckOptions {
     pub file_filter: Option<String>,
     pub id_filter: Option<Vec<String>>,
     pub section_filter: Option<String>,
+    pub has_command: bool,
+    pub manual: bool,
     pub tags_expr: Option<String>,
     pub search_expr: Option<String>,
     pub depth: Option<usize>,
@@ -403,6 +405,14 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
                 if !matches_search_expr(expr, &haystack) {
                     continue;
                 }
+            }
+
+            if opts.has_command && fact.command.is_none() {
+                continue;
+            }
+
+            if opts.manual && fact.command.is_some() {
+                continue;
             }
 
             let display_path = format_display_path(sheet, &section_path, &fact.label);

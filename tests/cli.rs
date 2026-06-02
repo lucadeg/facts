@@ -8854,3 +8854,127 @@ fn lifecycle_list_manual_filter_shows_agent_candidates() {
         .stdout(predicate::str::contains("manual two"))
         .stdout(predicate::str::contains("cmd fact").not());
 }
+
+// ---------------------------------------------------------------------------
+// check --has-command and --manual filters
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check_has_command_skips_manual_facts() {
+    let dir = project("- manual fact\n- label: cmd fact\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--has-command", "--no-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cmd fact"))
+        .stdout(predicate::str::contains("manual fact").not())
+        .stdout(predicate::str::contains("0 manual").not());
+}
+
+#[test]
+fn check_manual_skips_command_facts() {
+    let dir = project("- manual fact\n- label: cmd fact\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--manual", "--no-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("manual fact"))
+        .stdout(predicate::str::contains("cmd fact").not());
+}
+
+#[test]
+fn check_manual_with_agent_runs_agent_only() {
+    let dir = project("- manual one\n- label: cmd fact\n  command: \"true\"\n- manual two\n");
+    let script = pass_all_agent_script(&dir);
+    facts_cmd(&dir)
+        .args(["check", "--manual", "--agent", &script])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("manual one"))
+        .stdout(predicate::str::contains("manual two"))
+        .stdout(predicate::str::contains("cmd fact").not())
+        .stdout(predicate::str::contains("agent"));
+}
+
+#[test]
+fn check_has_command_no_manual_in_summary() {
+    // With --has-command, manual facts are excluded, so summary should show 0 manual
+    let dir = project("- manual fact\n- label: cmd fact\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--has-command", "--no-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 passed"))
+        .stdout(predicate::str::contains("manual").not());
+}
+
+#[test]
+fn check_has_command_composes_with_tags() {
+    let dir = project(
+        "- manual fact @mvp\n- label: cmd tagged\n  command: \"true\"\n  tags: [mvp]\n- label: cmd untagged\n  command: \"true\"\n",
+    );
+    facts_cmd(&dir)
+        .args(["check", "--has-command", "--tags", "mvp", "--no-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cmd tagged"))
+        .stdout(predicate::str::contains("cmd untagged").not())
+        .stdout(predicate::str::contains("manual fact").not());
+}
+
+#[test]
+fn check_manual_composes_with_section() {
+    let dir = project(
+        "# api\n\n- api manual fact\n- label: api cmd\n  command: \"true\"\n\n# cli\n\n- cli manual fact\n",
+    );
+    facts_cmd(&dir)
+        .args(["check", "--manual", "--section", "api", "--no-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("api manual fact"))
+        .stdout(predicate::str::contains("api cmd").not())
+        .stdout(predicate::str::contains("cli manual fact").not());
+}
+
+#[test]
+fn check_has_command_and_manual_together_yields_nothing() {
+    // Both flags together means nothing matches (like list)
+    let dir = project("- manual fact\n- label: cmd fact\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--has-command", "--manual", "--no-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 passed"))
+        .stdout(predicate::str::contains("0 failed"));
+}
+
+#[test]
+fn check_has_command_strict_exits_zero() {
+    // --strict with --has-command should not fail — no manual facts to penalize
+    let dir = project("- manual fact\n- label: cmd fact\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--has-command", "--strict", "--no-agent"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_manual_strict_exits_nonzero_without_agent() {
+    // --strict with --manual and no agent: manual facts are unverified = failure
+    let dir = project("- manual fact\n- label: cmd fact\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--manual", "--strict", "--no-agent"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_manual_strict_exits_zero_with_passing_agent() {
+    // --strict with --manual and passing agent: all verified = success
+    let dir = project("- manual fact\n- label: cmd fact\n  command: \"true\"\n");
+    let script = pass_all_agent_script(&dir);
+    facts_cmd(&dir)
+        .args(["check", "--manual", "--strict", "--agent", &script])
+        .assert()
+        .success();
+}
