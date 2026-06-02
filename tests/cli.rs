@@ -9300,3 +9300,205 @@ exit 1
         "expected fail reason preserved: {stdout}"
     );
 }
+
+// ===========================================================================
+// Flag interaction edge cases (iteration 30)
+// ===========================================================================
+
+#[test]
+fn check_strict_has_command_is_noop() {
+    // --strict --has-command: strict should be a no-op since only command facts are checked
+    let dir = project(
+        "# section1\n\n- label: cmd fact\n  command: \"true\"\n\n# section2\n\n- manual fact\n",
+    );
+    let output = facts_cmd(&dir)
+        .args(["check", "--strict", "--has-command"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "strict+has-command should exit 0 when all commands pass"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("1 passed"),
+        "should show 1 passed: {stdout}"
+    );
+    // Manual facts should not appear at all
+    assert!(
+        !stdout.contains("manual"),
+        "manual facts should be filtered out: {stdout}"
+    );
+}
+
+#[test]
+fn check_strict_manual_no_agent_fails() {
+    // --strict --manual --no-agent: should fail since manual facts can't be verified
+    let dir = project("- manual fact one\n- manual fact two\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--strict", "--manual", "--no-agent"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "strict+manual+no-agent should exit non-zero"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("2 manual"),
+        "should show 2 manual: {stdout}"
+    );
+    assert!(
+        stdout.contains("--strict"),
+        "should show strict message: {stdout}"
+    );
+}
+
+#[test]
+fn check_strict_manual_with_agent_pass() {
+    // --strict --manual --agent: when agent passes all, should exit 0
+    let dir = project("- manual fact one\n- manual fact two\n- label: cmd\n  command: \"true\"\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--strict", "--manual", "--agent", &template])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "strict+manual+agent(pass) should exit 0"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Command fact should be filtered out (--manual)
+    assert!(
+        !stdout.contains("cmd"),
+        "command fact should be filtered out: {stdout}"
+    );
+    assert!(
+        stdout.contains("2 passed"),
+        "should show 2 passed: {stdout}"
+    );
+}
+
+#[test]
+fn check_quiet_verbose_quiet_takes_precedence() {
+    // --quiet --verbose: quiet should override verbose, no output
+    let dir = project("- label: fact one\n  command: \"true\"\n- manual fact\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--quiet", "--verbose", "--agent", &template])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "quiet+verbose should exit 0 when all pass"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.is_empty(),
+        "quiet should suppress all output even with verbose: '{stdout}'"
+    );
+}
+
+#[test]
+fn check_timeout_zero_means_no_timeout() {
+    // --timeout 0 should behave like no timeout (not instant failure)
+    let dir = project("- label: fast fact\n  command: \"true\"\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--timeout", "0"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "--timeout 0 should pass (treated as no timeout)"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("1 passed"),
+        "--timeout 0 should pass: {stdout}"
+    );
+    assert!(
+        !stdout.contains("timed out"),
+        "--timeout 0 should not timeout: {stdout}"
+    );
+}
+
+#[test]
+fn check_batch_size_very_large() {
+    // --batch-size 1000000: very large batch size, should handle gracefully
+    let dir = project("- manual one\n- manual two\n- manual three\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--batch-size", "1000000", "--agent", &template])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "large batch-size should work");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("3 passed"),
+        "all 3 facts should pass in single batch: {stdout}"
+    );
+    // Should be a single batch
+    assert!(stdout.contains("1 batch"), "should be 1 batch: {stdout}");
+}
+
+#[test]
+fn check_empty_sections_filtered_out_shows_clean_summary() {
+    // When all facts in sections are filtered out, only the summary shows
+    let dir = project("# section1\n\n- manual fact one\n\n# section2\n\n- manual fact two\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--has-command"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "no facts to check should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("0 passed"),
+        "should show 0 passed: {stdout}"
+    );
+    // Section headers should NOT appear in output
+    assert!(
+        !stdout.contains("section1"),
+        "section headers should not appear when all filtered out: {stdout}"
+    );
+    assert!(
+        !stdout.contains("section2"),
+        "section headers should not appear when all filtered out: {stdout}"
+    );
+}
+
+#[test]
+fn check_nonexistent_tags_filter_yields_empty() {
+    // When a tag filter matches nothing, summary shows zeros and exit 0
+    let dir = project("- label: fact one\n  command: \"true\"\n- manual fact\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--tags", "nonexistent"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "no matching facts should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("0 passed"),
+        "should show 0 passed: {stdout}"
+    );
+    assert!(
+        !stdout.contains("manual"),
+        "no manual count when 0: {stdout}"
+    );
+}
+
+#[test]
+fn check_strict_nonexistent_tags_filter_exits_zero() {
+    // --strict with no matching facts should exit 0 (no manual facts = nothing to fail on)
+    let dir = project("- manual fact one\n- manual fact two\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--strict", "--tags", "nonexistent"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "--strict with no matching facts should exit 0"
+    );
+}

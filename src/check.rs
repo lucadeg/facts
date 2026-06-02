@@ -346,7 +346,8 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
     }
     let assigned_ids = id::assign_ids(&all_fact_labels);
 
-    let timeout = opts.timeout.map(Duration::from_secs);
+    // --timeout 0 means "no timeout" (same as omitting the flag).
+    let timeout = opts.timeout.filter(|&t| t > 0).map(Duration::from_secs);
     let mut results: Vec<CheckResult> = Vec::new();
     let mut manual_facts: Vec<agent::ManualFact> = Vec::new();
     let mut manual_indices: Vec<usize> = Vec::new();

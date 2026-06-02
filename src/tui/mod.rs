@@ -2541,4 +2541,108 @@ mod tests {
         // The check stays running because pending count > 0
         assert!(app.check_running);
     }
+
+    // === Mutation-during-check cancellation (all mutations call load_data) ===
+
+    #[test]
+    fn test_delete_during_check_cancels_check() {
+        let (_dir, mut app) = temp_app("- fact to delete\n- label: slow\n  command: sleep 60\n");
+        app.check_timeout = None;
+        app.start_check();
+        assert!(app.check_running);
+
+        let delete_id = app.display_facts[0].id.clone();
+
+        // Simulate delete confirmation
+        app.pending_delete = Some(delete_id.clone());
+        app.mode = Mode::ConfirmDelete;
+        app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::empty()))
+            .unwrap();
+
+        // The delete calls load_data, which should cancel the check
+        assert!(
+            !app.check_running,
+            "delete should cancel running check via load_data"
+        );
+        assert!(app.check_rx.is_none());
+        assert!(app.check_results.is_empty());
+        // Verify the fact was deleted
+        assert!(
+            !app.display_facts.iter().any(|f| f.id == delete_id),
+            "deleted fact should be gone"
+        );
+    }
+
+    #[test]
+    fn test_load_data_cancels_check_and_resets_all_counters() {
+        // Comprehensive verification that load_data cancels checks for ALL mutation paths:
+        // add, edit, move, and delete all call load_data() after success.
+        // This test verifies every counter is reset when load_data runs during an active check.
+        let (_dir, mut app) = temp_app(
+            "- label: cmd1\n  command: true\n- label: cmd2\n  command: false\n- manual fact\n",
+        );
+        app.agent_disabled = true;
+        app.start_check();
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+        // Verify we have results from the check
+        assert!(app.check_passed > 0 || app.check_failed > 0);
+        assert!(!app.check_results.is_empty());
+
+        // Start a new slow check, then trigger load_data (simulates any mutation)
+        app.check_timeout = None;
+        // Modify file to add a slow fact for the new check
+        let content = "- label: slow\n  command: sleep 60\n- manual fact\n";
+        fs::write(app.project_root.join(".facts"), content).unwrap();
+        app.load_data().unwrap();
+        app.start_check();
+        assert!(app.check_running);
+
+        // Now simulate a mutation by calling load_data again
+        app.load_data().unwrap();
+
+        // All check state should be fully reset
+        assert!(!app.check_running, "check must stop after load_data");
+        assert!(app.check_rx.is_none(), "rx must be dropped");
+        assert!(app.check_cancel.is_none(), "cancel flag must be dropped");
+        assert_eq!(app.check_passed, 0, "passed counter must reset");
+        assert_eq!(app.check_failed, 0, "failed counter must reset");
+        assert_eq!(app.check_manual, 0, "manual counter must reset");
+        assert_eq!(app.check_unresolved, 0, "unresolved counter must reset");
+        assert_eq!(app.check_total_facts, 0, "total facts must reset");
+        assert!(app.check_results.is_empty(), "results map must be cleared");
+    }
+
+    #[test]
+    fn test_check_results_not_corrupted_by_index_after_delete() {
+        // After deleting a fact, global indices shift. Any stale check results
+        // from a previous check should not map to the wrong fact.
+        let (_dir, mut app) = temp_app(
+            "- label: fact A\n  command: true\n- label: fact B\n  command: true\n- label: fact C\n  command: true\n",
+        );
+        app.start_check();
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+        assert_eq!(app.check_passed, 3);
+
+        // Now delete the first fact (which shifts indices)
+        let delete_id = app.display_facts[0].id.clone();
+        app.pending_delete = Some(delete_id);
+        app.mode = Mode::ConfirmDelete;
+        app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::empty()))
+            .unwrap();
+
+        // After delete + load_data, all check results should be cleared
+        assert!(
+            app.check_results.is_empty(),
+            "stale check results must be cleared after delete to prevent index corruption"
+        );
+        assert_eq!(app.display_facts.len(), 2, "two facts should remain");
+    }
 }
