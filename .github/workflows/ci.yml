@@ -32,5 +32,11 @@ jobs:
       - name: Test
         run: cargo test
 
+      - name: Checkout wiki
+        run: git clone --depth 1 https://github.com/av/facts.wiki.git "${GITHUB_WORKSPACE}/../facts.wiki"
+
+      - name: Install facts CLI
+        run: cargo install --path . --root ~/.local --locked
+
       - name: Validate own facts
-        run: cargo run -- check --no-agent
+        run: facts check --no-agent
