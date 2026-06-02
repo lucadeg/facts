@@ -690,9 +690,6 @@ fn check_double_at_tags(content: &str, filename: &str, diagnostics: &mut Vec<Lin
     }
 }
 
-/// Known agent preset names (must match PRESETS in agent.rs).
-const AGENT_PRESETS: &[&str] = &["claude", "codex", "pi", "droid", "opencode", "mi"];
-
 /// Check the `.config agent` value for validity.
 ///
 /// When an `agent` key is set in `.config`, warn if it is not a known preset
@@ -700,6 +697,7 @@ const AGENT_PRESETS: &[&str] = &["claude", "codex", "pi", "droid", "opencode", "
 /// the prompt is appended as a trailing argument, which may not be what the
 /// user intended. Also warn when the agent value is empty.
 fn check_config_agent(sheet: &FactSheet, filename: &str, diagnostics: &mut Vec<LintDiagnostic>) {
+    let presets = crate::agent::preset_names();
     for (_path, fact) in sheet.all_facts() {
         if !fact.is_config() {
             continue;
@@ -718,7 +716,7 @@ fn check_config_agent(sheet: &FactSheet, filename: &str, diagnostics: &mut Vec<L
                 });
                 continue;
             }
-            if AGENT_PRESETS.contains(&val) {
+            if presets.contains(&val) {
                 continue; // Known preset — valid.
             }
             if !val.contains("%p") {

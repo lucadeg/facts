@@ -5401,7 +5401,7 @@ fn init_generated_file_parses_and_lints_cleanly() {
     facts_cmd(&dir).arg("lint").assert().success();
 
     // Check should work (no parse errors from the commented config).
-    facts_cmd(&dir).arg("check").assert(); // don't assert success since commands may fail
+    let _ = facts_cmd(&dir).arg("check").assert(); // don't assert success since commands may fail
 }
 
 #[test]

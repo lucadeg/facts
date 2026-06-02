@@ -40,6 +40,11 @@ const PRESETS: &[Preset] = &[
     },
 ];
 
+/// Return the list of known agent preset names.
+pub(crate) fn preset_names() -> Vec<&'static str> {
+    PRESETS.iter().map(|p| p.name).collect()
+}
+
 /// A manual fact to be verified by an agent.
 pub struct ManualFact {
     pub id: String,
@@ -114,7 +119,7 @@ fn auto_detect_agent() -> Option<ResolvedAgent> {
 }
 
 /// Check whether a binary exists on PATH without shelling out to `which`.
-fn which_exists(name: &str) -> bool {
+pub(crate) fn which_exists(name: &str) -> bool {
     let path_var = std::env::var("PATH").unwrap_or_default();
     let separator = if cfg!(windows) { ';' } else { ':' };
     for dir in path_var.split(separator) {
@@ -400,12 +405,9 @@ fn find_fact_verdicts(text: &str) -> Vec<ParsedVerdict> {
         if let Some(id) = extract_id_attr(attrs) {
             let verdict = if content.eq_ignore_ascii_case("pass") {
                 AgentVerdict::Pass
-            } else if let Some(reason) = content
-                .strip_prefix("FAIL")
-                .or_else(|| content.strip_prefix("fail"))
-                .or_else(|| content.strip_prefix("Fail"))
-            {
-                AgentVerdict::Fail(reason.trim().to_string())
+            } else if content.len() >= 4 && content[..4].eq_ignore_ascii_case("fail") {
+                let reason = content[4..].trim();
+                AgentVerdict::Fail(reason.to_string())
             } else {
                 AgentVerdict::Fail(content.to_string())
             };

@@ -165,13 +165,7 @@ pub(crate) fn is_claude_available(root: &Path) -> bool {
     {
         return true;
     }
-    std::process::Command::new("which")
-        .arg("claude")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    crate::agent::which_exists("claude")
 }
 
 #[cfg(unix)]
