@@ -17,6 +17,7 @@ use crate::tags::{matches_search_expr, matches_tag_expr, validate_tag_expr};
 
 /// Options for the check command.
 pub struct CheckOptions {
+    pub file_filter: Option<String>,
     pub id_filter: Option<Vec<String>>,
     pub section_filter: Option<String>,
     pub tags_expr: Option<String>,
@@ -274,7 +275,7 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
     }
 
     let root = project::find_project_root()?;
-    let files = project::discover_fact_files(&root)?;
+    let files = project::discover_with_explicit(&root, opts.file_filter.as_deref())?;
 
     if files.is_empty() {
         eprintln!("no .facts files found in {}", root.display());
@@ -328,11 +329,8 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
     for path in &files {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        let filename = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(".facts");
-        let sheet = parser::parse(&content, filename)
+        let filename = project::relative_filename(&root, path);
+        let sheet = parser::parse(&content, &filename)
             .with_context(|| format!("failed to parse {}", path.display()))?;
         sheets.push(sheet);
     }
@@ -361,11 +359,17 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
     let mut out = stdout.lock();
 
     for sheet in &sheets {
+        let file_matches = if let Some(ref f) = opts.file_filter {
+            sheet.filename == *f || sheet.filename == format!("{f}.facts")
+        } else {
+            true
+        };
+
         for (section_path, fact) in sheet.all_facts() {
             let id = assigned_ids[fact_idx].clone();
             fact_idx += 1;
 
-            if fact.is_config() {
+            if !file_matches || fact.is_config() {
                 continue;
             }
 

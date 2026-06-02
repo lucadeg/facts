@@ -6849,3 +6849,410 @@ fn list_shows_command_indicator_for_command_facts() {
         "manual fact should have question indicator: {manual_plain}"
     );
 }
+
+// ===========================================================================
+// check --file filter
+// ===========================================================================
+
+#[test]
+fn check_file_filters_to_specified_file() {
+    // Two files: .facts and api.facts. --file api should only check api.facts.
+    let dir = project("- label: default fact\n  command: \"true\"\n");
+    fs::write(
+        dir.path().join("api.facts"),
+        "- label: api fact\n  command: \"true\"\n",
+    )
+    .unwrap();
+    let output = facts_cmd(&dir)
+        .args(["check", "--file", "api", "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("api fact"),
+        "expected api fact in output: {stdout}"
+    );
+    assert!(
+        !stdout.contains("default fact"),
+        "expected default fact to be filtered out: {stdout}"
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "expected 1 passed (api only): {stdout}"
+    );
+}
+
+#[test]
+fn check_file_with_facts_extension() {
+    // --file api.facts should work the same as --file api
+    let dir = project("- label: default fact\n  command: \"true\"\n");
+    fs::write(
+        dir.path().join("api.facts"),
+        "- label: api fact\n  command: \"true\"\n",
+    )
+    .unwrap();
+    let output = facts_cmd(&dir)
+        .args(["check", "--file", "api.facts", "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("api fact"),
+        "expected api fact in output: {stdout}"
+    );
+    assert!(
+        !stdout.contains("default fact"),
+        "expected default fact filtered out: {stdout}"
+    );
+}
+
+#[test]
+fn check_file_nonexistent_errors() {
+    let dir = project("- fact\n");
+    facts_cmd(&dir)
+        .args(["check", "--file", "nonexistent", "--no-agent"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("file not found"));
+}
+
+#[test]
+fn check_file_with_agent_sends_correct_facts() {
+    // --file + --agent: agent should only receive manual facts from the specified file.
+    let dir = project("- default manual fact\n");
+    fs::write(dir.path().join("api.facts"), "- api manual fact\n").unwrap();
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--file", "api", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Only the api manual fact should go to the agent.
+    assert!(
+        stdout.contains("api manual fact"),
+        "expected api manual fact in output: {stdout}"
+    );
+    assert!(
+        !stdout.contains("default manual fact"),
+        "expected default manual fact filtered out: {stdout}"
+    );
+    assert!(
+        stdout.contains("Verifying 1 manual"),
+        "expected 1 manual fact sent to agent: {stdout}"
+    );
+}
+
+#[test]
+fn check_file_default_file() {
+    // --file .facts should only check .facts, not other fact files.
+    let dir = project("- label: default fact\n  command: \"true\"\n");
+    fs::write(
+        dir.path().join("api.facts"),
+        "- label: api fact\n  command: \"true\"\n",
+    )
+    .unwrap();
+    let output = facts_cmd(&dir)
+        .args(["check", "--file", ".facts", "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("default fact"),
+        "expected default fact in output: {stdout}"
+    );
+    assert!(
+        !stdout.contains("api fact"),
+        "expected api fact filtered out: {stdout}"
+    );
+}
+
+#[test]
+fn check_file_ids_remain_stable() {
+    // IDs should be globally stable regardless of --file filter.
+    let dir = project("- label: default fact\n  command: \"true\"\n");
+    fs::write(
+        dir.path().join("api.facts"),
+        "- label: api fact\n  command: \"true\"\n",
+    )
+    .unwrap();
+
+    // Get ID of api fact from unfiltered list
+    let list_output = facts_cmd(&dir).args(["list"]).output().unwrap();
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    let api_line = list_stdout
+        .lines()
+        .find(|l| l.contains("api fact"))
+        .unwrap();
+    let api_id_full = api_line.split_whitespace().next().unwrap();
+
+    // Check with --file api and verify the same ID appears
+    let check_output = facts_cmd(&dir)
+        .args(["check", "--file", "api", "--no-agent"])
+        .output()
+        .unwrap();
+    let check_stdout = String::from_utf8_lossy(&check_output.stdout);
+    assert!(
+        check_stdout.contains(api_id_full),
+        "expected stable ID '{api_id_full}' in filtered check output: {check_stdout}"
+    );
+}
+
+// ===========================================================================
+// check: filter combinations with agent
+// ===========================================================================
+
+#[test]
+fn check_depth_with_agent() {
+    // --depth 0 + --agent: only top-level manual facts go to agent.
+    let dir = project("- top level manual\n\n# section\n\n- nested manual\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--depth", "0", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("top level manual"),
+        "expected top-level fact in output: {stdout}"
+    );
+    assert!(
+        !stdout.contains("nested manual"),
+        "expected nested fact filtered out at depth 0: {stdout}"
+    );
+    assert!(
+        stdout.contains("Verifying 1 manual"),
+        "expected 1 manual fact sent to agent: {stdout}"
+    );
+}
+
+#[test]
+fn check_depth_one_includes_first_level_section() {
+    // --depth 1 includes top-level and first-level section facts.
+    let dir = project("- top manual\n\n# sec\n\n- sec manual\n\n## deep\n\n- deep manual\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--depth", "1", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("top manual"),
+        "expected top-level fact: {stdout}"
+    );
+    assert!(
+        stdout.contains("sec manual"),
+        "expected section-level fact: {stdout}"
+    );
+    assert!(
+        !stdout.contains("deep manual"),
+        "expected deep fact filtered out at depth 1: {stdout}"
+    );
+    assert!(
+        stdout.contains("Verifying 2 manual"),
+        "expected 2 manual facts sent to agent: {stdout}"
+    );
+}
+
+#[test]
+fn check_tags_and_section_combined_with_agent() {
+    // --tags + --section + --agent: all filters compose.
+    let dir = project(
+        "# alpha\n\n- alpha tagged @mvp\n- alpha untagged\n\n# beta\n\n- beta tagged @mvp\n",
+    );
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args([
+            "check",
+            "--section",
+            "alpha",
+            "--tags",
+            "mvp",
+            "--agent",
+            &template,
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("alpha tagged"),
+        "expected alpha tagged fact: {stdout}"
+    );
+    assert!(
+        !stdout.contains("alpha untagged"),
+        "expected alpha untagged filtered out: {stdout}"
+    );
+    assert!(
+        !stdout.contains("beta tagged"),
+        "expected beta tagged filtered out (wrong section): {stdout}"
+    );
+    assert!(
+        stdout.contains("Verifying 1 manual"),
+        "expected 1 manual fact sent to agent: {stdout}"
+    );
+}
+
+#[test]
+fn check_search_and_depth_combined_with_agent() {
+    // --search + --depth + --agent
+    let dir = project("- alpha top\n- beta top\n\n# sec\n\n- alpha deep\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args([
+            "check", "--search", "alpha", "--depth", "0", "--agent", &template,
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("alpha top"),
+        "expected alpha top-level fact: {stdout}"
+    );
+    assert!(
+        !stdout.contains("beta top"),
+        "expected beta filtered out by search: {stdout}"
+    );
+    assert!(
+        !stdout.contains("alpha deep"),
+        "expected alpha deep filtered out by depth: {stdout}"
+    );
+    assert!(
+        stdout.contains("Verifying 1 manual"),
+        "expected 1 manual fact sent to agent: {stdout}"
+    );
+}
+
+#[test]
+fn check_file_and_section_combined_with_agent() {
+    // --file + --section + --agent
+    let dir = project("# alpha\n\n- default alpha\n\n# beta\n\n- default beta\n");
+    fs::write(
+        dir.path().join("api.facts"),
+        "# alpha\n\n- api alpha\n\n# beta\n\n- api beta\n",
+    )
+    .unwrap();
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args([
+            "check",
+            "--file",
+            "api",
+            "--section",
+            "alpha",
+            "--agent",
+            &template,
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("api alpha"),
+        "expected api alpha fact: {stdout}"
+    );
+    assert!(
+        !stdout.contains("api beta"),
+        "expected api beta filtered out by section: {stdout}"
+    );
+    assert!(
+        !stdout.contains("default"),
+        "expected default facts filtered out by file: {stdout}"
+    );
+    assert!(
+        stdout.contains("Verifying 1 manual"),
+        "expected 1 manual fact sent to agent: {stdout}"
+    );
+}
+
+#[test]
+fn check_file_and_tags_combined_with_agent() {
+    // --file + --tags + --agent
+    let dir = project("- default tagged @mvp\n");
+    fs::write(
+        dir.path().join("api.facts"),
+        "- api tagged @mvp\n- api untagged\n",
+    )
+    .unwrap();
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args([
+            "check", "--file", "api", "--tags", "mvp", "--agent", &template,
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("api tagged"),
+        "expected api tagged fact: {stdout}"
+    );
+    assert!(
+        !stdout.contains("api untagged"),
+        "expected api untagged filtered out: {stdout}"
+    );
+    assert!(
+        !stdout.contains("default"),
+        "expected default facts filtered out: {stdout}"
+    );
+}
+
+#[test]
+fn check_all_filters_combined_with_agent() {
+    // All filters at once: --file + --section + --tags + --depth + --search + --agent
+    let dir = project("- default fact\n");
+    fs::write(
+        dir.path().join("api.facts"),
+        "# endpoints\n\n- api endpoint validated @mvp\n- api endpoint untagged\n\n## nested\n\n- api nested @mvp\n\n# models\n\n- api model @mvp\n",
+    )
+    .unwrap();
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args([
+            "check",
+            "--file",
+            "api",
+            "--section",
+            "endpoints",
+            "--tags",
+            "mvp",
+            "--depth",
+            "1",
+            "--search",
+            "validated",
+            "--agent",
+            &template,
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("api endpoint validated"),
+        "expected the one fact matching all filters: {stdout}"
+    );
+    assert!(
+        stdout.contains("Verifying 1 manual"),
+        "expected exactly 1 manual fact sent to agent: {stdout}"
+    );
+    // Verify no other facts appear
+    assert!(
+        !stdout.contains("untagged"),
+        "untagged fact should be filtered: {stdout}"
+    );
+    assert!(
+        !stdout.contains("nested"),
+        "nested fact should be filtered by depth: {stdout}"
+    );
+    assert!(
+        !stdout.contains("model"),
+        "model fact should be filtered by section: {stdout}"
+    );
+    assert!(
+        !stdout.contains("default"),
+        "default file fact should be filtered: {stdout}"
+    );
+}

@@ -95,6 +95,10 @@ enum Command {
 
     /// Run all command-facts, report pass/fail/manual.
     Check {
+        /// Filter by file name (e.g. "api" or "api.facts").
+        #[arg(long)]
+        file: Option<String>,
+
         /// Check only the fact(s) with these IDs.
         #[arg(long)]
         id: Vec<String>,
@@ -416,6 +420,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Some(Command::Check {
+            file,
             id,
             section,
             tags,
@@ -429,6 +434,7 @@ fn main() -> anyhow::Result<()> {
             verbose,
         }) => {
             let opts = check::CheckOptions {
+                file_filter: file,
                 id_filter: if id.is_empty() { None } else { Some(id) },
                 section_filter: section,
                 tags_expr: tags,

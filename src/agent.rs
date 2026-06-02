@@ -832,6 +832,315 @@ mod tests {
         );
     }
 
+    // =========================================================================
+    // Verdict parsing edge cases
+    // =========================================================================
+
+    #[test]
+    fn test_parse_verdicts_wrapped_in_markdown_code_blocks() {
+        // Agent wraps verdicts in ```xml ... ```
+        let output = "Here are my results:\n\n```xml\n<fact-verdict id=\"abc\">PASS</fact-verdict>\n<fact-verdict id=\"def\">FAIL missing impl</fact-verdict>\n```\n\nAll done!";
+        let facts = vec![
+            ManualFact {
+                id: "abc".to_string(),
+                label: "test one".to_string(),
+                section_path: String::new(),
+            },
+            ManualFact {
+                id: "def".to_string(),
+                label: "test two".to_string(),
+                section_path: String::new(),
+            },
+        ];
+        let result = parse_verdicts(output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+        assert!(matches!(result.verdicts[1].1, AgentVerdict::Fail(ref r) if r == "missing impl"));
+    }
+
+    #[test]
+    fn test_parse_verdicts_explanatory_text_before_and_after() {
+        // Agent adds explanatory text around verdicts
+        let output = "I have analyzed the codebase and here are my findings:\n\n<fact-verdict id=\"xyz\">PASS</fact-verdict>\n\nThe above fact is verified because the feature exists in main.rs line 42.";
+        let facts = vec![ManualFact {
+            id: "xyz".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+    }
+
+    #[test]
+    fn test_parse_verdicts_multiline_content() {
+        // Agent puts the reason on a separate line within the tags
+        let output = "<fact-verdict id=\"abc\">\nFAIL the feature is missing\n</fact-verdict>";
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(
+            matches!(result.verdicts[0].1, AgentVerdict::Fail(ref r) if r == "the feature is missing"),
+            "got: {:?}",
+            result.verdicts[0].1
+        );
+    }
+
+    #[test]
+    fn test_parse_verdicts_multiline_pass() {
+        // Agent puts PASS on a separate line
+        let output = "<fact-verdict id=\"abc\">\n  PASS\n</fact-verdict>";
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(
+            matches!(result.verdicts[0].1, AgentVerdict::Pass),
+            "got: {:?}",
+            result.verdicts[0].1
+        );
+    }
+
+    #[test]
+    fn test_parse_verdicts_extra_whitespace_in_attrs() {
+        // Extra whitespace around the id attribute
+        let output = "<fact-verdict  id=\"abc\"  >PASS</fact-verdict>";
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+    }
+
+    #[test]
+    fn test_parse_verdicts_extra_attributes() {
+        // Agent adds extra attributes to the tag
+        let output =
+            "<fact-verdict id=\"abc\" status=\"verified\" confidence=\"high\">PASS</fact-verdict>";
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+    }
+
+    #[test]
+    fn test_parse_verdicts_self_closing_tag_ignored() {
+        // Self-closing tags like <fact-verdict id="abc" status="PASS" /> are not
+        // the expected format -- they should be silently ignored (no content between
+        // open and close tags).
+        let output = "<fact-verdict id=\"abc\" status=\"PASS\" />";
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        // No closing tag found, so the fact stays unresolved
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Unresolved));
+    }
+
+    #[test]
+    fn test_parse_verdicts_multiple_on_same_line() {
+        // Multiple verdicts on one line
+        let output = "<fact-verdict id=\"a\">PASS</fact-verdict><fact-verdict id=\"b\">FAIL nope</fact-verdict>";
+        let facts = vec![
+            ManualFact {
+                id: "a".to_string(),
+                label: "one".to_string(),
+                section_path: String::new(),
+            },
+            ManualFact {
+                id: "b".to_string(),
+                label: "two".to_string(),
+                section_path: String::new(),
+            },
+        ];
+        let result = parse_verdicts(output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+        assert!(matches!(result.verdicts[1].1, AgentVerdict::Fail(ref r) if r == "nope"));
+    }
+
+    #[test]
+    fn test_parse_verdicts_empty_reason() {
+        // FAIL with no reason text
+        let output = "<fact-verdict id=\"abc\">FAIL</fact-verdict>";
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(
+            matches!(result.verdicts[0].1, AgentVerdict::Fail(ref r) if r.is_empty()),
+            "got: {:?}",
+            result.verdicts[0].1
+        );
+    }
+
+    #[test]
+    fn test_parse_verdicts_very_long_reason() {
+        // Very long reason string
+        let long_reason = "a".repeat(5000);
+        let output = format!("<fact-verdict id=\"abc\">FAIL {long_reason}</fact-verdict>");
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(&output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Fail(ref r) if r.len() == 5000));
+    }
+
+    #[test]
+    fn test_parse_verdicts_case_insensitive_pass() {
+        // "pass" in lowercase
+        let output = "<fact-verdict id=\"abc\">pass</fact-verdict>";
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(
+            matches!(result.verdicts[0].1, AgentVerdict::Pass),
+            "lowercase 'pass' should be recognized, got: {:?}",
+            result.verdicts[0].1
+        );
+    }
+
+    #[test]
+    fn test_parse_verdicts_mixed_case_pass() {
+        // "Pass" in mixed case
+        let output = "<fact-verdict id=\"abc\">Pass</fact-verdict>";
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(
+            matches!(result.verdicts[0].1, AgentVerdict::Pass),
+            "mixed case 'Pass' should be recognized, got: {:?}",
+            result.verdicts[0].1
+        );
+    }
+
+    #[test]
+    fn test_parse_verdicts_case_insensitive_fail() {
+        // "fail" in lowercase
+        let output = "<fact-verdict id=\"abc\">fail not working</fact-verdict>";
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(
+            matches!(result.verdicts[0].1, AgentVerdict::Fail(ref r) if r == "not working"),
+            "lowercase 'fail' should be recognized, got: {:?}",
+            result.verdicts[0].1
+        );
+    }
+
+    #[test]
+    fn test_parse_verdicts_single_quote_id() {
+        // Agent uses single quotes for the id attribute
+        let output = "<fact-verdict id='abc'>PASS</fact-verdict>";
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+    }
+
+    #[test]
+    fn test_parse_verdicts_content_with_xml_like_chars() {
+        // Reason text containing < or > characters
+        let output = "<fact-verdict id=\"abc\">FAIL value should be > 0</fact-verdict>";
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        // The parser looks for </fact-verdict> closing tag, so > in the reason is fine
+        assert!(
+            matches!(result.verdicts[0].1, AgentVerdict::Fail(ref r) if r.contains("> 0")),
+            "got: {:?}",
+            result.verdicts[0].1
+        );
+    }
+
+    #[test]
+    fn test_parse_verdicts_unknown_id_ignored() {
+        // Agent produces a verdict for an ID not in the fact list
+        let output = "<fact-verdict id=\"unknown\">PASS</fact-verdict>";
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        // The "abc" fact should be unresolved since no verdict matched it
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Unresolved));
+    }
+
+    #[test]
+    fn test_parse_verdicts_nested_fences() {
+        // Multiple levels of markdown fences
+        let output = "```\n```xml\n<fact-verdict id=\"abc\">PASS</fact-verdict>\n```\n```\n";
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+    }
+
+    #[test]
+    fn test_parse_verdicts_mixed_pass_fail_case() {
+        // Mix of different case variants across facts
+        let output = "<fact-verdict id=\"a\">PASS</fact-verdict>\n<fact-verdict id=\"b\">pass</fact-verdict>\n<fact-verdict id=\"c\">Fail reason</fact-verdict>\n<fact-verdict id=\"d\">FAIL REASON</fact-verdict>";
+        let facts = vec![
+            ManualFact {
+                id: "a".to_string(),
+                label: "one".to_string(),
+                section_path: String::new(),
+            },
+            ManualFact {
+                id: "b".to_string(),
+                label: "two".to_string(),
+                section_path: String::new(),
+            },
+            ManualFact {
+                id: "c".to_string(),
+                label: "three".to_string(),
+                section_path: String::new(),
+            },
+            ManualFact {
+                id: "d".to_string(),
+                label: "four".to_string(),
+                section_path: String::new(),
+            },
+        ];
+        let result = parse_verdicts(output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+        assert!(matches!(result.verdicts[1].1, AgentVerdict::Pass));
+        assert!(matches!(result.verdicts[2].1, AgentVerdict::Fail(ref r) if r == "reason"));
+        assert!(matches!(result.verdicts[3].1, AgentVerdict::Fail(ref r) if r == "REASON"));
+    }
+
     #[test]
     fn test_template_without_percent_p_appends_prompt() {
         // When template has no %p, the escaped prompt should be appended.
