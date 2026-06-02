@@ -199,6 +199,24 @@ grep -q "section" src/list.rs
 
 The pattern to watch for: if your command is `grep -q "<keyword from the fact>" <file that obviously contains that keyword>`, it's not a real check. Stop and either find a meaningful command or leave the fact manual.
 
+#### Black-box commands
+
+A good check command tests behavior from the outside. Compare:
+
+```sh
+# Coupled to implementation — breaks on any refactor:
+node -e 'const src=fs.readFileSync("src/setup.rs","utf8"); if (!src.includes("portable-pty")) process.exit(1)'
+grep -q 'status_code=401' src/auth.py && grep -q '_http_exception_handler' src/main.py
+python -m pytest tests/test_streaming.py::TestTerminalEvents -q
+
+# Black-box — tests what the user sees:
+echo '{}' | myapp upload --file /dev/stdin 2>&1 | grep -q '413'
+curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer expired' localhost:8080/api | grep -q '401'
+myapp stream --input test 2>&1 | tail -1 | grep -q '"type":"done"'
+```
+
+The first group reads source for library names, greps for variable names, or just runs an existing test. They validate implementation, not behavior. The second group runs the tool and checks what comes out. That is what survives a refactor.
+
 #### When to leave facts manual
 
 Not every fact can or should have a command. Leave facts manual when they are:
@@ -238,6 +256,8 @@ Prefer facts that are:
 - **Falsifiable** — you could imagine a broken implementation where this fact would not hold
 - **Worth preserving** — if someone rewrote this project from scratch using only the fact sheet, would this fact help them get the behavior right?
 
+**Before adding any fact, search the existing sheet for coverage.** If an existing fact already describes the behavior, sharpen it instead of adding a near-duplicate. If multiple existing facts describe the same endpoint or feature at micro-granularity (one per error code, one per branch), consolidate them into one fact about the feature's contract. A well-curated sheet stays useful because facts are merged and removed as often as they are added.
+
 A fact sheet with 40 precise behavioral facts is more useful than one with 200 structural observations. If your fact sheet is growing past ~80 facts in a single file, split into focused files (`api.facts`, `cli.facts`) and prune structural filler.
 
 When writing new facts, use the entity names from the `## domain` section. Consistent vocabulary across the fact sheet helps agents build an accurate mental model. If you find yourself using a term that does not appear in `## domain`, either add it there first or use the existing term instead.
@@ -271,41 +291,27 @@ Report what changed: facts added, edited, removed, commands added. If any areas 
 facts list
 facts check
 
-# Spawn subagents to scan the codebase by feature area:
-# Subagent 1: user authentication — login, signup, session handling, token lifecycle
-# Subagent 2: payment processing — charge flow, refunds, webhook handling, error cases
-# Subagent 3: notification system — delivery channels, retry logic, dedup, rate limits
+# Spawn subagents to scan by feature area (auth, payments, notifications)
 
 # Build the project ontology from scan results:
 facts add "a PaymentIntent is a Stripe object representing a single charge attempt" --section domain
 facts add "a Webhook is an incoming HTTP POST from Stripe reporting a payment event" --section domain
-facts add "a DeadLetter is a Webhook that exhausted all retry attempts" --section domain
-facts add "a Session is a server-side auth record tied to a refresh token" --section domain
 facts add "a PaymentIntent produces Webhooks on status changes" --section domain
-facts add "failed Webhooks become DeadLetters after 3 retries" --section domain
 
-# Classify existing facts by lifecycle stage (using domain vocabulary):
+# Classify existing facts:
+facts edit x1z --add-tag "implemented"   # true, code-backed
+facts edit a2b --add-tag "spec"          # precise but unimplemented
+facts edit c3d --add-tag "draft"         # vague, needs refinement
+facts remove p2q                          # obsolete
 
-# This fact is true — code proves it
-facts edit x1z --add-tag "implemented"
+# Consolidate: found 4 facts about webhook error paths — merge into one
+facts remove w1a && facts remove w2b && facts remove w3c
+facts edit w4d --label "failed payment webhooks retry 3 times with exponential backoff, then dead-letter"
 
-# This fact is precise but the code doesn't exist yet
-facts edit a2b --add-tag "spec"
-
-# This fact is vague ("supports payments") — needs refinement
-facts edit c3d --add-tag "draft"
-
-# An old fact about Python is no longer true — project migrated to Rust
-facts remove p2q
-
-# Found behavioral truths while reading code — add untagged (ground truth)
-facts add "failed payment webhooks retry 3 times with exponential backoff, then dead-letter" \
-  --section payments/webhooks
+# Add discovered behavioral truths (untagged = ground truth)
 facts add "API rate limits to 100 req/min per key; exceeded requests get 429 with Retry-After header" \
   --section api/limits
 
-# Verify everything
+# Verify
 facts check
-
-# Report: 6 domain facts added, 5 classified (@implemented: 3, @spec: 1, @draft: 1), 1 added, 1 removed
 ```

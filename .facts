@@ -1,3 +1,6 @@
+- label: facts configuration
+  id: .config
+  agent: grok
 # facts
 - a CLI for fact-driven development with coding agents
 - works with fact sheets — flat lists of validatable atomic facts

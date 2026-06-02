@@ -65,9 +65,14 @@ For each `@draft` fact, and across the fact sheet generally, scan for these cate
 - Are there implied entities that multiple facts reference but never define in `## domain`?
 - Do relation facts match the actual code relationships?
 
-**Missing validation:**
-- Facts that could have a meaningful check command but don't
-- Facts with commands that don't actually validate the claim (keyword grep)
+**Curation opportunities:**
+- Can near-duplicate facts be merged into one sharper fact?
+- Can micro-facts about one feature (one per error code, one per branch) be consolidated into one fact about the feature's contract?
+- Should a file past ~80 facts be split into focused files or pruned?
+
+**Validation quality:**
+- Do manual facts have a meaningful check command waiting to be written?
+- Do existing commands test behavior from the outside, or do they read source files or wrap existing tests?
 
 ### 3. Discuss with the user
 
@@ -123,33 +128,19 @@ facts list
 facts list --tags "draft"
 facts check
 
-# @draft facts to refine:
-# "d4e": "handles auth correctly" @draft
-# "f6g": "uses PostgreSQL and Redis for caching" @draft
+# Present findings to user:
+# 1. Vague: "d4e" says "handles auth correctly" — split into 3 precise facts?
+# 2. Compound: "f6g" packs PostgreSQL + Redis into one fact — split?
+# 3. Gap: no rate limiting fact in api/auth
+# 4. Accumulation: 4 facts about webhook error codes — consolidate into one?
 
-# Present findings to the user:
-#
-# 1. Vague: "d4e" says "handles auth correctly" — what specifically?
-#    Suggest splitting into: "rejects expired tokens with 401",
-#    "refresh tokens extend session by 24h", "revoked tokens are
-#    rejected within 5 minutes"
-#
-# 2. Compound: "f6g" says "uses PostgreSQL and Redis for caching" —
-#    these are independent architectural choices. Split into two facts?
-#
-# 3. Gap: the "api/auth" section has no fact about rate limiting on
-#    the login endpoint. Should there be one?
-
-# User agrees — apply changes, transitioning @draft → @spec
-
-facts remove d4e  # remove the vague draft
+# User agrees — apply changes
+facts remove d4e
 facts add "rejects expired tokens with 401" --section api/auth --tags "spec"
 facts add "refresh tokens extend session by 24h" --section api/auth --tags "spec"
-facts add "revoked tokens are rejected within 5 minutes" --section api/auth --tags "spec"
 facts add "login endpoint rate-limited to 10 attempts per minute" --section api/auth --tags "spec"
 facts edit f6g --label "uses PostgreSQL for persistence" --remove-tag "draft" --add-tag "spec"
-facts add "uses Redis for caching" --section architecture --tags "spec" --command "grep -q redis docker-compose.yml"
 
 facts check
-# Report: 2 @draft facts refined into 6 @spec facts, 1 gap filled
+# Report: 2 @draft refined into 4 @spec, 1 gap filled, 4 webhook facts consolidated to 1
 ```

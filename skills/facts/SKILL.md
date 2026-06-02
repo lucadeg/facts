@@ -204,6 +204,17 @@ Structural facts (dependencies, file layout) are supporting detail, not the main
 
 Good validation commands are fast, idempotent, and test one thing. Prefer `test -f`, `grep -q`, and short script checks over running full builds.
 
+### What makes a good fact
+
+Each quality below is the inverse of a failure mode observed in real agent-maintained projects.
+
+- **Spec-first** — the fact was written before the code, not after. A fact sheet is a specification, not a changelog. Record completion by tagging `@implemented`, not by adding new facts about work you already did.
+- **Behavioral label** — the label describes what a user or caller observes. Source file names, line numbers, branch names, and coverage percentages never belong in a fact label — those belong in tests.
+- **Black-box check** — the command tests from the outside: runs the tool, calls the API, checks output. If your command parses source files for variable names, function signatures, or specific string positions, rewrite it to test behavior.
+- **Independent value** — removing the fact would lose something. If an existing test already validates the same claim, the fact is a pass-through wrapper — state a different claim or skip it.
+- **Actively curated** — before adding a fact, check whether existing facts already cover the behavior. Merge related facts instead of letting the sheet grow without bound. A single file past ~80 facts needs splitting.
+- **Contract-level** — one fact per feature contract, not one per code path. If three facts describe the same endpoint's success, error, and edge-case paths, consolidate into one fact about the endpoint's contract.
+
 ## Domain vocabulary
 
 The `## domain` section in the main `.facts` file defines the project's key entities and their relationships. These are facts too — atomic truth statements — but they describe the conceptual model rather than specific behaviors.
@@ -254,10 +265,10 @@ facts check                             # verify
 ```
 
 **Maintain accuracy during coding work:**
-When you add a feature, add corresponding facts. When you fix a bug, verify related facts still hold. When you remove code, remove obsolete facts.
+When you add a feature, add corresponding facts. When you fix a bug, verify related facts still hold. When you remove code, remove obsolete facts. Before adding a fact, check if the existing sheet already covers the behavior — consolidate near-duplicates rather than accumulating them.
 ```
 facts check                             # find failing facts
-facts at <id> "implemented"             # or the long form: facts edit <id> --add-tag "implemented"
+facts at <id> "implemented"             # tag done (alias for edit --add-tag)
 facts rm <id>                           # remove obsolete facts
 facts add "new truth" --section foo     # add discovered truths
 ```

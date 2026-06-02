@@ -54,6 +54,8 @@ For each fact:
 facts edit <id> --remove-tag "spec" --add-tag "implemented"
 ```
 
+**Completion = tagging, not adding.** When you finish implementing a fact, tag it `@implemented` — that is how you record completion. The `@spec` fact already describes the behavior; a second fact restating it from an implementation angle adds noise, not signal. Similarly, if you notice a code branch lacks coverage, the right response is a test, not a fact. Facts specify behavior; tests verify code paths.
+
 Use subagents to implement independent facts in parallel. Each subagent should:
 - Receive the specific facts it is responsible for (IDs, labels, commands)
 - Have enough context about the overall spec and codebase to make good decisions
@@ -116,23 +118,15 @@ If any `@spec` facts remain, report them with a clear explanation of what blocke
 ## Example session
 
 ```
-# Load full spec
+# Load full spec and identify remaining work
 facts list
-
-# See current state
 facts check
 facts list --tags "spec"
 
-# Implement foundational @spec facts first
-# Fact "x1z" @spec: project uses SQLite for storage
-# -> Add sqlx dependency, create database module
-# -> Run: facts check (confirms x1z passes)
+# Implement @spec facts — code, verify, tag
 facts edit x1z --remove-tag "spec" --add-tag "implemented"
 
-# Spawn subagents for independent @spec facts:
-# Subagent 1: "a2b" (users table schema) + "c3d" (GET /users endpoint)
-# Subagent 2: "e4f" (auth middleware) + "g5h" (session handling)
-
+# Spawn subagents for independent @spec facts
 # After subagents complete, verify everything
 facts check
 facts list --tags "spec"  # should be empty or explained
