@@ -685,10 +685,10 @@
 - label: There is a Ratatui-based TUI, launched via the 'tui' subcommand in the clap CLI
   id: kot
   tags: [implemented]
-- label: TUI supports full facts CRUD operations equivalent to the CLI: list/browse (with live search expr filters matching --section/--tags/--search/--depth/--file/--manual/--has-command), add, remove, edit (label, command, tags replace, new-id), get, check (live streaming); move supported via section field in edit form (dedicated move key in progress)
+- label: TUI supports full facts CRUD operations equivalent to the CLI: list/browse (with live search, tags boolean expr, and section path filters), add, remove, edit (label, command, tags replace, new-id), get, check (live streaming); move supported via dedicated m key opening a move form
   id: hj2
   tags: [implemented]
-- label: TUI follows the Facts Design theme and look'n'feel from the Design System in the Downloads: dark background, bright neon green (#00ff9f) and cyan accents, clean Unicode box-drawing borders, consistent padding and professional appearance matching the CLI green/red/yellow output and hero branding
+- label: TUI uses a custom color theme: dark background, neon green accents for pass and accent elements, purple/violet borders and muted text, cyan highlights, red for errors, clean Unicode box-drawing borders, consistent padding matching the CLI output style
   id: qcl
   tags: [implemented]
 - label: TUI subcommand is defined as 'Tui' variant in the clap Command enum in src/main.rs (launched with no additional args)
@@ -703,16 +703,16 @@
 - label: TUI main browse screen renders a virtualized table of facts (columns: ID, full section path, truncated label, tags, has-command indicator ✓, current check status icon)
   id: npw
   tags: [list, implemented]
-- label: TUI supports all list filters live: section path (subpath match), tags boolean expr, search boolean expr, depth, file, manual, has-command; filter bar updates table instantly on keystroke
+- label: TUI supports live filters: section path (subpath match), tags boolean expr, search text expr; filter bar updates table instantly on keystroke
   id: gva
   tags: [implemented]
 - label: TUI reuses core modules without duplication: parser, writer, model, project, locate, id, tags (for expr parsing), and check runner logic
   id: 828
   tags: [implemented]
-- label: TUI uses vim-style keybindings (hjkl/arrows for nav, / focus search/filter, a add, e edit, d delete/remove, c check, g get, r refresh, ? help, q/esc quit, m for move via edit) plus mouse click to select where supported by crossterm
+- label: TUI uses vim-style keybindings (j/k arrows for nav, / focus filter, a add, e edit, d delete, c check, r refresh, ? help, q/esc quit, m move, x check-single, t tree) plus mouse scroll for navigation
   id: 6tb
   tags: [implemented]
-- label: TUI add operation opens a centered modal form with labeled inputs for: label (required, focused first), section, command, tags (comma or space), explicit id, target file; supports tab navigation, validation, submit on Ctrl-S or last-field Enter
+- label: TUI add operation opens a centered modal form with labeled inputs for: label (required, focused first), section, command, tags (comma-separated), explicit id, target file; supports tab navigation, validation, submit on Ctrl-S or last-field Enter
   id: nk9
   tags: [implemented]
 - label: TUI edit supports editing selected fact(s) via form prefilled from current values, including tags (full replace via csv field) and setting new-id (preserves explicit id when present); add-tag/remove-tag semantics available via re-entering adjusted tags list
@@ -724,16 +724,16 @@
 - label: TUI properly initializes terminal: raw mode via crossterm, alternate screen buffer, optional mouse capture; installs panic hook that restores terminal state before re-panicking
   id: pcy
   tags: [implemented]
-- label: TUI guarantees terminal state restoration (raw mode off, main screen, cursor visible, mouse disabled) on every exit path: normal quit, errors, Ctrl-C (via signal handler or Drop), and panics (via hook)
+- label: TUI restores terminal state (raw mode off, main screen, cursor visible, mouse disabled) on normal quit and panics (via panic hook); error exits from the event loop may skip cleanup since there is no Drop guard
   id: 25x
   tags: [implemented]
-- label: TUI theme is defined in a dedicated module with Facts Design System colors: dark navy background (Rgb 10,10,30), neon green accent (Rgb 0,255,159 matching hero), cyan highlights, red for errors, dim gray for secondary text, clean borders using box-drawing chars
+- label: TUI theme is defined in a dedicated module with custom colors: dark background (Rgb 10,10,18), neon green accent/pass (Rgb 0,255,136), purple borders and muted text, cyan highlights, red for errors, clean borders using box-drawing chars
   id: v4f7
   tags: [implemented]
-- label: TUI supports multiple .facts files: header shows current file and project root (multi-file discovery on load; dedicated cycle/select keybinding and target switching in progress)
+- label: TUI supports multiple .facts files: merges all discovered files into a single table view with per-row filename indicators; project root shown in status bar
   id: 6ul
   tags: [implemented]
-- label: TUI has a full-screen help mode (triggered by ?) showing keybindings table, usage tips, and Facts Design styled footer; esc or q returns to previous mode
+- label: TUI has a centered modal help overlay (triggered by ?) showing keybindings table and styled footer; esc or q returns to previous mode
   id: 7kx
   tags: [implemented]
 - label: TUI status bar always visible: project root | active filters summary | fact count (filtered/total) | selected ID | current mode | last action result
@@ -751,7 +751,7 @@
 - label: TUI mutations (add/edit/remove/move) call into or replicate the exact logic of add.rs/edit.rs/remove.rs/move_fact.rs + writer so resulting .facts files, ID assignment, section cleanup, and raw preservation are identical to CLI
   id: 7tb
   tags: [implemented]
-- label: TUI increases the number of [dependencies] in Cargo.toml to 4 (clap, anyhow, ratatui, crossterm); the 'minimal dependencies' architecture fact is updated to -le 5 to accommodate the TUI feature
+- label: TUI adds ratatui, crossterm, unicode-width, and serde_json dependencies to Cargo.toml (6 total with clap and anyhow); the minimal dependencies architecture fact uses -le 6
   id: y12
   tags: [implemented]
 

@@ -116,8 +116,6 @@ fn extract_description(content: &str) -> String {
     }
 }
 
-// --- unified skills list bridge helpers (for tracequest iter15) ---
-
 fn discover_local_skills() -> Vec<(String, String, String)> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut results = Vec::new();

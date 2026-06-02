@@ -455,7 +455,11 @@ fn find_fact_verdicts(text: &str) -> Vec<ParsedVerdict> {
         let content = text[content_start..content_start + end].trim();
 
         if let Some(id) = extract_id_attr(attrs) {
-            let verdict = if content.eq_ignore_ascii_case("pass") {
+            // Accept "PASS" or "PASS explanation..." (trailing text ignored)
+            let verdict = if content.len() >= 4
+                && content[..4].eq_ignore_ascii_case("pass")
+                && (content.len() == 4 || content.as_bytes()[4].is_ascii_whitespace())
+            {
                 AgentVerdict::Pass
             } else if content.len() >= 4 && content[..4].eq_ignore_ascii_case("fail") {
                 let reason = content[4..].trim();
@@ -559,6 +563,55 @@ mod tests {
         }];
         let result = parse_verdicts(output, &facts);
         assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+    }
+
+    #[test]
+    fn test_parse_verdicts_pass_with_trailing_explanation() {
+        let output =
+            r#"<fact-verdict id="abc">PASS Theme matches: dark BG (10,10,18)</fact-verdict>"#;
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+            filename: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(
+            matches!(result.verdicts[0].1, AgentVerdict::Pass),
+            "PASS with trailing explanation should be parsed as Pass, got {:?}",
+            result.verdicts[0].1
+        );
+    }
+
+    #[test]
+    fn test_parse_verdicts_pass_bare() {
+        // "PASS" with no trailing text should also work
+        let output = r#"<fact-verdict id="abc">PASS</fact-verdict>"#;
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+            filename: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+    }
+
+    #[test]
+    fn test_parse_verdicts_passover_not_pass() {
+        // A word starting with "pass" but not followed by whitespace should not match PASS
+        let output = r#"<fact-verdict id="abc">passover reason</fact-verdict>"#;
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+            filename: String::new(),
+        }];
+        let result = parse_verdicts(output, &facts);
+        assert!(
+            matches!(result.verdicts[0].1, AgentVerdict::Fail(_)),
+            "passover should not be parsed as Pass"
+        );
     }
 
     #[test]
