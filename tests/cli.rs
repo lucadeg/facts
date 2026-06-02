@@ -7680,3 +7680,262 @@ fn check_from_subdirectory_with_agent() {
         .stdout(predicate::str::contains("1 passed"))
         .stdout(predicate::str::contains("(agent)"));
 }
+
+// ===========================================================================
+// CI exit code scenarios and --strict flag
+// ===========================================================================
+
+#[test]
+fn check_strict_flag_accepted() {
+    let dir = project("- label: ok\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--strict"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_strict_all_pass_exits_zero() {
+    let dir = project("- label: ok\n  command: \"true\"\n- label: also ok\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--strict", "--no-agent"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_strict_manual_facts_exits_nonzero() {
+    // Without --strict, manual facts exit 0. With --strict, they cause failure.
+    let dir = project("- just a manual fact\n");
+    // First verify without --strict: exits 0
+    facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .assert()
+        .success();
+    // With --strict: exits non-zero
+    facts_cmd(&dir)
+        .args(["check", "--strict", "--no-agent"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_strict_shows_message() {
+    let dir = project("- a manual fact\n");
+    facts_cmd(&dir)
+        .args(["check", "--strict", "--no-agent"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "--strict: unverified manual facts cause non-zero exit",
+        ));
+}
+
+#[test]
+fn check_strict_quiet_manual_exits_nonzero() {
+    // In quiet mode with --strict, manual facts still cause non-zero exit.
+    let dir = project("- a manual fact\n");
+    facts_cmd(&dir)
+        .args(["check", "--strict", "--no-agent", "-q"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_strict_quiet_no_output() {
+    // Quiet + strict still suppresses all output.
+    let dir = project("- a manual fact\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--strict", "--no-agent", "-q"])
+        .output()
+        .unwrap();
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn check_strict_mixed_pass_and_manual_exits_nonzero() {
+    // Even with all commands passing, unverified manual facts cause failure in strict mode.
+    let dir = project("- label: ok\n  command: \"true\"\n- manual fact\n");
+    facts_cmd(&dir)
+        .args(["check", "--strict", "--no-agent"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_strict_with_agent_pass_exits_zero() {
+    // When agent verifies all manual facts and they pass, --strict exits 0.
+    let dir = project("- a manual fact verified by agent\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--strict", "--agent", &template])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_strict_with_agent_fail_exits_nonzero() {
+    // Agent-failed facts exit non-zero regardless of --strict (they always do).
+    let dir = project("- a manual fact\n");
+    let script = fail_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--strict", "--agent", &template])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_strict_with_agent_unresolved_exits_nonzero() {
+    // Agent-unresolved facts exit non-zero regardless of --strict (they always do).
+    let dir = project("- a manual fact\n");
+    let script = silent_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--strict", "--agent", &template])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_without_strict_manual_exits_zero() {
+    // Baseline: without --strict, manual facts do not affect exit code.
+    let dir = project("- manual fact one\n- manual fact two\n");
+    facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_ci_pattern_no_agent_quiet_all_pass() {
+    // CI pattern: facts check --no-agent -q — all command facts pass.
+    let dir = project("- label: ok\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--no-agent", "-q"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_ci_pattern_no_agent_quiet_some_fail() {
+    // CI pattern: facts check --no-agent -q — some command facts fail.
+    let dir = project("- label: ok\n  command: \"true\"\n- label: nope\n  command: \"false\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--no-agent", "-q"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_ci_pattern_tags_filter() {
+    // CI pattern: facts check --tags "critical" -q — only check critical facts.
+    let dir = project(
+        "- label: important\n  command: \"true\"\n  tags: [critical]\n- label: nope\n  command: \"false\"\n",
+    );
+    facts_cmd(&dir)
+        .args(["check", "--tags", "critical", "-q"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_ci_pattern_strict_catches_unverified() {
+    // CI pattern: facts check --strict --no-agent -q
+    // Ensures CI fails when manual facts exist and are not verified.
+    let dir = project("- label: ok\n  command: \"true\"\n- unverified claim\n");
+    facts_cmd(&dir)
+        .args(["check", "--strict", "--no-agent", "-q"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_ci_pattern_strict_with_agent_all_verified() {
+    // CI pattern: facts check --strict --agent <agent> -q
+    // All facts verified (command + agent), exits 0.
+    let dir = project("- label: ok\n  command: \"true\"\n- manual claim\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--strict", "--agent", &template, "-q"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_exit_code_all_pass_is_zero() {
+    // Exit code 0 when ALL facts pass.
+    let dir = project("- label: a\n  command: \"true\"\n- label: b\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_exit_code_some_fail_is_nonzero() {
+    // Exit code non-zero when any fact fails.
+    let dir = project("- label: ok\n  command: \"true\"\n- label: bad\n  command: \"false\"\n");
+    facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_exit_code_agent_unresolved_is_nonzero() {
+    // Exit code non-zero when agent leaves facts unresolved.
+    let dir = project("- manual only fact\n");
+    let script = silent_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_exit_code_agent_fail_is_nonzero() {
+    // Exit code non-zero when agent says FAIL.
+    let dir = project("- manual fact\n");
+    let script = fail_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_exit_code_manual_without_strict_is_zero() {
+    // Without --strict, manual facts (no agent) do NOT cause failure.
+    let dir = project("- manual fact\n");
+    facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_exit_code_mix_pass_fail_manual() {
+    // Mixed: pass + fail + manual. Fail dominates.
+    let dir = project(
+        "- label: ok\n  command: \"true\"\n- label: bad\n  command: \"false\"\n- manual fact\n",
+    );
+    facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn check_strict_help_text() {
+    facts_cmd(&project("- x\n"))
+        .args(["check", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--strict"))
+        .stdout(predicate::str::contains("unverified manual facts"));
+}

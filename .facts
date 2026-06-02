@@ -579,6 +579,9 @@
 - label: check --section flag filters by section path, case-insensitive sub-path match, consistent with list --section
   command: cargo run -- check --help 2>&1 | grep -q "\-\-section"
   tags: [implemented]
+- label: check --strict flag treats unverified manual facts as failures for non-zero exit code
+  command: cargo run -- check --help 2>&1 | grep -q "\-\-strict"
+  tags: [implemented]
 
 ### agent
 - label: --agent flag accepts a shell command template with %p as the prompt placeholder, or a preset name

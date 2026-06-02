@@ -29,6 +29,7 @@ pub struct CheckOptions {
     pub batch_size: Option<usize>,
     pub quiet: bool,
     pub verbose: bool,
+    pub strict: bool,
 }
 
 const DEFAULT_BATCH_SIZE: usize = 10;
@@ -581,7 +582,8 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
         .filter(|r| matches!(r.status, CheckStatus::AgentUnresolved))
         .count();
 
-    let has_failures = failed > 0 || agent_failed > 0 || agent_unresolved > 0;
+    let has_failures =
+        failed > 0 || agent_failed > 0 || agent_unresolved > 0 || (opts.strict && manual > 0);
 
     if !quiet {
         let total_passed = passed + agent_passed;
@@ -634,6 +636,12 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
                     "{manual} {noun} no command — verify each against the code and state PASS or FAIL with a one-line reason."
                 )),
             );
+            if opts.strict {
+                println!(
+                    "{}",
+                    color::red("--strict: unverified manual facts cause non-zero exit."),
+                );
+            }
             if resolved_agent.is_none() {
                 println!(
                     "{}",

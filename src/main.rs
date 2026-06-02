@@ -144,6 +144,11 @@ enum Command {
         /// Show extra detail: agent prompts and raw output.
         #[arg(long, short)]
         verbose: bool,
+
+        /// Treat unverified manual facts as failures (non-zero exit). Useful for CI
+        /// pipelines that require every fact to be verified.
+        #[arg(long)]
+        strict: bool,
     },
 
     /// Append a fact to a file and section.
@@ -432,6 +437,7 @@ fn main() -> anyhow::Result<()> {
             batch_size,
             quiet,
             verbose,
+            strict,
         }) => {
             let opts = check::CheckOptions {
                 file_filter: file,
@@ -446,6 +452,7 @@ fn main() -> anyhow::Result<()> {
                 batch_size,
                 quiet,
                 verbose,
+                strict,
             };
             let all_passed = check::run(&opts)?;
             if !all_passed {
