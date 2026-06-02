@@ -9022,3 +9022,281 @@ fn check_manual_strict_exits_zero_with_passing_agent() {
         .assert()
         .success();
 }
+
+// =========================================================================
+// Agent partial failure and error recovery
+// =========================================================================
+
+#[test]
+fn check_agent_partial_verdicts_marks_rest_unresolved() {
+    // Agent returns verdicts for only the first fact in a batch of 3.
+    // The other 2 should be marked as unresolved.
+    let dir = project("- manual one\n- manual two\n- manual three\n");
+    let script = write_agent_script(
+        &dir,
+        "mock_partial.sh",
+        r#"#!/bin/sh
+# Only emit a verdict for the first fact ID, skip the rest
+ID=$(echo "$1" | grep -oP '\[\K[^\]]+' | head -1)
+echo "<fact-verdict id=\"$ID\">PASS</fact-verdict>"
+"#,
+    );
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // 1 passed (agent), 2 unresolved
+    assert!(
+        stdout.contains("1 passed"),
+        "expected 1 passed in output: {stdout}"
+    );
+    assert!(
+        stdout.contains("2 unresolved"),
+        "expected 2 unresolved in output: {stdout}"
+    );
+    // Should show (agent) for the passed one
+    assert!(
+        stdout.contains("(agent)"),
+        "expected (agent) marker: {stdout}"
+    );
+    // Should show (unresolved) for the others
+    assert!(
+        stdout.contains("(unresolved)"),
+        "expected (unresolved) marker: {stdout}"
+    );
+    // Non-zero exit because unresolved facts are failures
+    assert!(!output.status.success());
+}
+
+#[test]
+fn check_agent_crash_preserves_emitted_verdicts() {
+    // Agent outputs a PASS verdict for the first fact, then crashes with exit 1.
+    // The PASS verdict should be preserved; the remaining fact should be unresolved.
+    let dir = project("- manual one\n- manual two\n");
+    let script = write_agent_script(
+        &dir,
+        "mock_crash_partial.sh",
+        r#"#!/bin/sh
+# Emit a verdict for the first ID, then crash
+ID=$(echo "$1" | grep -oP '\[\K[^\]]+' | head -1)
+echo "<fact-verdict id=\"$ID\">PASS</fact-verdict>"
+exit 1
+"#,
+    );
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // The PASS verdict for the first fact should be preserved
+    assert!(
+        stdout.contains("1 passed"),
+        "expected 1 passed (crash should preserve emitted verdicts): {stdout}"
+    );
+    // The second fact should be unresolved
+    assert!(
+        stdout.contains("1 unresolved"),
+        "expected 1 unresolved: {stdout}"
+    );
+    // Should still show the agent error
+    assert!(
+        stdout.contains("agent error"),
+        "expected agent error message: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_first_batch_ok_second_crashes() {
+    // With batch_size=2 and 4 facts, the first batch succeeds,
+    // the second batch crashes. First-batch results should be preserved.
+    let dir = project("- manual one\n- manual two\n- manual three\n- manual four\n");
+    let counter_file = dir.path().join("call_count");
+    fs::write(&counter_file, "0").unwrap();
+    let counter_path = counter_file.to_string_lossy().to_string();
+    let script = write_agent_script(
+        &dir,
+        "mock_batch_fail.sh",
+        &format!(
+            r#"#!/bin/sh
+COUNT=$(cat "{counter_path}")
+COUNT=$((COUNT + 1))
+echo "$COUNT" > "{counter_path}"
+if [ "$COUNT" -eq 1 ]; then
+    # First batch: emit PASS for all IDs
+    echo "$1" | grep -oP '\[\K[^\]+]+' | while read -r id; do
+        echo "<fact-verdict id=\"$id\">PASS</fact-verdict>"
+    done
+else
+    # Second batch: crash
+    exit 1
+fi
+"#
+        ),
+    );
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template, "--batch-size", "2"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // First batch (2 facts) should pass
+    assert!(
+        stdout.contains("2 passed"),
+        "expected 2 passed from first batch: {stdout}"
+    );
+    // Second batch should show error
+    assert!(
+        stdout.contains("agent error"),
+        "expected agent error for second batch: {stdout}"
+    );
+    // Second batch facts should be unresolved
+    assert!(
+        stdout.contains("unresolved"),
+        "expected unresolved from second batch: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_stderr_warnings_with_success() {
+    // Agent prints warnings to stderr but exits 0 with valid verdicts.
+    // Verdicts should be parsed. Stderr should be visible in verbose mode.
+    let dir = project("- manual fact\n");
+    let script = write_agent_script(
+        &dir,
+        "mock_stderr.sh",
+        r#"#!/bin/sh
+echo "WARNING: this is a warning" >&2
+echo "DEBUG: some debug info" >&2
+ID=$(echo "$1" | grep -oP '\[\K[^\]]+' | head -1)
+echo "<fact-verdict id=\"$ID\">PASS</fact-verdict>"
+"#,
+    );
+    let template = format!("{script} %p");
+
+    // Without verbose: should pass, stderr not shown in stdout
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 passed"))
+        .stdout(predicate::str::contains("(agent)"));
+
+    // With verbose: stderr should be visible in the raw output
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template, "--verbose"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("WARNING: this is a warning"),
+        "expected stderr warning in verbose output: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_no_output_exits_zero_all_unresolved() {
+    // Agent produces no output but exits 0. All facts should be unresolved.
+    let dir = project("- manual one\n- manual two\n");
+    let script = write_agent_script(
+        &dir,
+        "mock_empty_ok.sh",
+        "#!/bin/sh\n# No output at all\nexit 0\n",
+    );
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("0 passed"), "expected 0 passed: {stdout}");
+    assert!(
+        stdout.contains("2 unresolved"),
+        "expected 2 unresolved: {stdout}"
+    );
+    assert!(
+        !output.status.success(),
+        "should exit non-zero when unresolved"
+    );
+}
+
+#[test]
+fn check_agent_large_output_handled() {
+    // Agent produces 100KB+ of output. Should be handled without issues.
+    let dir = project("- manual fact\n");
+    let script = write_agent_script(
+        &dir,
+        "mock_large.sh",
+        r#"#!/bin/sh
+# Generate ~120KB of output before the verdict
+for i in $(seq 1 3000); do
+    echo "Line $i: This is padding text to make the output very large. AAAAAAAAAAAAAAAAAAAAAA"
+done
+ID=$(echo "$1" | grep -oP '\[\K[^\]]+' | head -1)
+echo "<fact-verdict id=\"$ID\">PASS</fact-verdict>"
+# More padding after
+for i in $(seq 1 1000); do
+    echo "Trailing line $i: more padding text BBBBBBBBBBBBBBBBBBBBBBBBBBB"
+done
+"#,
+    );
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 passed"))
+        .stdout(predicate::str::contains("(agent)"));
+}
+
+#[test]
+fn check_agent_crash_with_some_verdicts_shows_both_error_and_results() {
+    // Agent emits FAIL for one fact, PASS for another, then crashes.
+    // Both verdicts should be preserved, error should be shown.
+    let dir = project("- manual one\n- manual two\n- manual three\n");
+    let script = write_agent_script(
+        &dir,
+        "mock_mixed_crash.sh",
+        r#"#!/bin/sh
+# Emit verdicts for first two IDs (PASS and FAIL), skip third, then crash
+IDS=$(echo "$1" | grep -oP '\[\K[^\]]+')
+FIRST=$(echo "$IDS" | head -1)
+SECOND=$(echo "$IDS" | sed -n '2p')
+echo "<fact-verdict id=\"$FIRST\">PASS</fact-verdict>"
+echo "<fact-verdict id=\"$SECOND\">FAIL the reason</fact-verdict>"
+exit 1
+"#,
+    );
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // First fact PASS preserved
+    assert!(
+        stdout.contains("1 passed"),
+        "expected 1 passed from crash: {stdout}"
+    );
+    // Second fact FAIL preserved
+    assert!(
+        stdout.contains("1 failed"),
+        "expected 1 failed from crash: {stdout}"
+    );
+    // Third fact unresolved
+    assert!(
+        stdout.contains("1 unresolved"),
+        "expected 1 unresolved from crash: {stdout}"
+    );
+    // Error still shown
+    assert!(
+        stdout.contains("agent error"),
+        "expected agent error in output: {stdout}"
+    );
+    assert!(
+        stdout.contains("the reason"),
+        "expected fail reason preserved: {stdout}"
+    );
+}

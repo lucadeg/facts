@@ -272,14 +272,16 @@ pub fn run_batch(
     };
 
     match result {
-        Ok((stdout, stderr)) => {
-            let combined = format!("{stdout}{stderr}");
+        Ok(proc_result) => {
+            let combined = format!("{}{}", proc_result.stdout, proc_result.stderr);
             let mut batch_result = parse_verdicts(&combined, facts);
             batch_result.raw_output = Some(combined);
             batch_result.prompt = prompt;
+            batch_result.error = proc_result.error;
             batch_result
         }
         Err(error_msg) => {
+            // Process could not be started at all — no output to parse.
             let verdicts = facts
                 .iter()
                 .map(|f| (f.id.clone(), AgentVerdict::Unresolved))
@@ -307,18 +309,34 @@ fn format_exit_error(code: i32, stderr: &str) -> String {
     format!("agent exited with code {code}{hint}")
 }
 
-/// Run agent command without timeout, returning (stdout, stderr) or an error message.
-fn run_agent_no_timeout(mut cmd: Command) -> Result<(String, String), String> {
+/// Result of running an agent process.
+/// Always includes stdout/stderr when the process ran (even if it exited non-zero).
+/// Only returns `Err` when the process could not be started at all.
+struct AgentProcessResult {
+    stdout: String,
+    stderr: String,
+    error: Option<String>,
+}
+
+/// Run agent command without timeout.
+fn run_agent_no_timeout(mut cmd: Command) -> Result<AgentProcessResult, String> {
     match cmd.output() {
-        Ok(output) if output.status.success() => {
+        Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            Ok((stdout, stderr))
-        }
-        Ok(output) => {
-            let code = output.status.code().unwrap_or(1);
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            Err(format_exit_error(code, &stderr))
+            let error = if output.status.success() {
+                None
+            } else {
+                Some(format_exit_error(
+                    output.status.code().unwrap_or(1),
+                    &stderr,
+                ))
+            };
+            Ok(AgentProcessResult {
+                stdout,
+                stderr,
+                error,
+            })
         }
         Err(e) => Err(format!("failed to run agent: {e}")),
     }
@@ -334,11 +352,11 @@ fn drain_pipe(pipe: Option<impl std::io::Read>) -> String {
     .unwrap_or_default()
 }
 
-/// Run agent command with timeout, returning (stdout, stderr) or an error message.
+/// Run agent command with timeout.
 fn run_agent_with_timeout(
     mut cmd: Command,
     timeout: std::time::Duration,
-) -> Result<(String, String), String> {
+) -> Result<AgentProcessResult, String> {
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return Err(format!("failed to start agent: {e}")),
@@ -352,10 +370,16 @@ fn run_agent_with_timeout(
             Ok(Some(status)) => {
                 let stdout = drain_pipe(child.stdout.take());
                 let stderr = drain_pipe(child.stderr.take());
-                if status.success() {
-                    return Ok((stdout, stderr));
-                }
-                return Err(format_exit_error(status.code().unwrap_or(1), &stderr));
+                let error = if status.success() {
+                    None
+                } else {
+                    Some(format_exit_error(status.code().unwrap_or(1), &stderr))
+                };
+                return Ok(AgentProcessResult {
+                    stdout,
+                    stderr,
+                    error,
+                });
             }
             Ok(None) => {
                 if start.elapsed() >= timeout {
@@ -1499,5 +1523,124 @@ mod tests {
         assert_eq!(template, "   ");
         // split_whitespace on "   " yields no tokens, so unwrap_or returns the original
         assert_eq!(name, "   ");
+    }
+
+    // =========================================================================
+    // Partial failure and error recovery tests
+    // =========================================================================
+
+    #[test]
+    fn test_run_batch_crash_preserves_verdicts() {
+        // Agent that emits a PASS verdict then exits non-zero.
+        // The PASS verdict should be preserved, the other fact unresolved.
+        let facts = vec![
+            ManualFact {
+                id: "abc".to_string(),
+                label: "fact one".to_string(),
+                section_path: String::new(),
+                filename: String::new(),
+            },
+            ManualFact {
+                id: "def".to_string(),
+                label: "fact two".to_string(),
+                section_path: String::new(),
+                filename: String::new(),
+            },
+        ];
+        // Script: emit PASS for "abc" then crash
+        let result = run_batch(
+            "sh -c 'echo \"<fact-verdict id=\\\"abc\\\">PASS</fact-verdict>\"; exit 1'",
+            &facts,
+            Path::new("."),
+            None,
+        );
+        // Error should be set (agent crashed)
+        assert!(
+            result.error.is_some(),
+            "expected error from crashed agent: {:?}",
+            result.error
+        );
+        // But the PASS verdict for "abc" should be preserved
+        assert!(
+            matches!(result.verdicts[0].1, AgentVerdict::Pass),
+            "expected PASS for abc, got {:?}",
+            result.verdicts[0].1
+        );
+        // "def" should be unresolved (no verdict emitted)
+        assert!(
+            matches!(result.verdicts[1].1, AgentVerdict::Unresolved),
+            "expected Unresolved for def, got {:?}",
+            result.verdicts[1].1
+        );
+    }
+
+    #[test]
+    fn test_run_batch_crash_no_verdicts_all_unresolved() {
+        // Agent crashes without emitting any verdicts. All facts should be unresolved.
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+            filename: String::new(),
+        }];
+        let result = run_batch("sh -c 'exit 1'", &facts, Path::new("."), None);
+        assert!(result.error.is_some());
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Unresolved));
+    }
+
+    #[test]
+    fn test_run_batch_success_no_output_all_unresolved() {
+        // Agent exits 0 with no output. All facts should be unresolved (no error).
+        let facts = vec![
+            ManualFact {
+                id: "abc".to_string(),
+                label: "one".to_string(),
+                section_path: String::new(),
+                filename: String::new(),
+            },
+            ManualFact {
+                id: "def".to_string(),
+                label: "two".to_string(),
+                section_path: String::new(),
+                filename: String::new(),
+            },
+        ];
+        let result = run_batch("true", &facts, Path::new("."), None);
+        assert!(
+            result.error.is_none(),
+            "no error expected: {:?}",
+            result.error
+        );
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Unresolved));
+        assert!(matches!(result.verdicts[1].1, AgentVerdict::Unresolved));
+    }
+
+    #[test]
+    fn test_run_batch_stderr_with_success() {
+        // Agent prints to stderr but exits 0 with valid verdicts.
+        // The verdict should be parsed from stdout, and stderr should appear in raw_output.
+        let facts = vec![ManualFact {
+            id: "abc".to_string(),
+            label: "test".to_string(),
+            section_path: String::new(),
+            filename: String::new(),
+        }];
+        let result = run_batch(
+            "sh -c 'echo WARNING >&2; echo \"<fact-verdict id=\\\"abc\\\">PASS</fact-verdict>\"'",
+            &facts,
+            Path::new("."),
+            None,
+        );
+        assert!(result.error.is_none());
+        assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
+        // Stderr should be present in raw output
+        assert!(
+            result
+                .raw_output
+                .as_ref()
+                .map_or(false, |r| r.contains("WARNING")),
+            "expected stderr in raw_output: {:?}",
+            result.raw_output
+        );
     }
 }
