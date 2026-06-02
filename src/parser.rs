@@ -325,6 +325,10 @@ pub fn strip_yaml_quotes(s: &str) -> &str {
 }
 
 /// Extract inline @tags from a string, returning (cleaned_label, tags).
+///
+/// Tags are words starting with `@`. Trailing commas on tags are stripped
+/// so that `@draft, @spec` produces tags `["draft", "spec"]` rather than
+/// `["draft,", "spec"]`.
 pub fn extract_inline_tags(s: &str) -> (String, Vec<String>) {
     let mut tags = Vec::new();
     let mut parts = Vec::new();
@@ -332,6 +336,7 @@ pub fn extract_inline_tags(s: &str) -> (String, Vec<String>) {
     for word in s.split_whitespace() {
         if let Some(tag) = word.strip_prefix('@') {
             let tag = tag.trim_start_matches('@');
+            let tag = tag.trim_end_matches(',');
             if !tag.is_empty() {
                 tags.push(tag.to_string());
             }
@@ -414,6 +419,60 @@ mod tests {
         let (label, tags) = extract_inline_tags("a plain fact");
         assert_eq!(label, "a plain fact");
         assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_extract_inline_tags_strips_trailing_commas() {
+        let (label, tags) = extract_inline_tags("lifecycle @draft, @spec, @implemented");
+        assert_eq!(label, "lifecycle");
+        assert_eq!(tags, vec!["draft", "spec", "implemented"]);
+    }
+
+    #[test]
+    fn test_extract_inline_tags_comma_only_on_last_has_no_effect() {
+        // Last tag has no trailing comma — this was already correct
+        let (label, tags) = extract_inline_tags("fact @a, @b");
+        assert_eq!(label, "fact");
+        assert_eq!(tags, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_extract_inline_tags_multiple_trailing_commas() {
+        let (label, tags) = extract_inline_tags("fact @tag,,");
+        assert_eq!(label, "fact");
+        assert_eq!(tags, vec!["tag"]);
+    }
+
+    #[test]
+    fn test_extract_inline_tags_comma_only_after_at_is_empty() {
+        // @, should produce an empty tag name after stripping, and be skipped
+        let (label, tags) = extract_inline_tags("fact @,");
+        assert_eq!(label, "fact");
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_extract_inline_tags_no_commas_unchanged() {
+        // Without commas, behavior is identical to before
+        let (label, tags) = extract_inline_tags("fact @draft @spec @implemented");
+        assert_eq!(label, "fact");
+        assert_eq!(tags, vec!["draft", "spec", "implemented"]);
+    }
+
+    #[test]
+    fn test_parse_plain_fact_with_comma_separated_tags() {
+        let content = "- a tagged fact @draft, @spec\n";
+        let sheet = parse(content, ".facts").unwrap();
+        assert_eq!(sheet.preamble[0].label, "a tagged fact");
+        assert_eq!(sheet.preamble[0].tags, vec!["draft", "spec"]);
+    }
+
+    #[test]
+    fn test_parse_mapping_label_with_comma_separated_tags() {
+        let content = "- label: lifecycle @draft, @spec, @implemented\n  command: echo ok\n";
+        let sheet = parse(content, ".facts").unwrap();
+        assert_eq!(sheet.preamble[0].label, "lifecycle");
+        assert_eq!(sheet.preamble[0].tags, vec!["draft", "spec", "implemented"]);
     }
 
     #[test]

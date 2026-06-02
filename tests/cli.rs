@@ -123,6 +123,50 @@ fn list_filter_tags() {
 }
 
 #[test]
+fn inline_tags_with_commas_stripped_correctly() {
+    // Tags written as @draft, @spec should parse as "draft" and "spec" (no trailing comma)
+    let dir = project("- a fact @draft, @spec\n");
+    // Filter by "draft" should find the fact (comma stripped from tag name)
+    facts_cmd(&dir)
+        .args(["list", "--tags", "draft"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("a fact"));
+    // Filter by "spec" should also find the fact
+    facts_cmd(&dir)
+        .args(["list", "--tags", "spec"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("a fact"));
+    // Filter by "draft," (with comma) should NOT find anything
+    facts_cmd(&dir)
+        .args(["list", "--tags", "draft,"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn inline_tags_with_commas_in_mapping_label() {
+    // Tags in a mapping label like `label: lifecycle @draft, @spec` should also strip commas
+    let dir = project("- label: lifecycle @draft, @spec, @implemented\n  command: \"true\"\n");
+    facts_cmd(&dir)
+        .args(["list", "--tags", "draft"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("lifecycle"));
+    facts_cmd(&dir)
+        .args(["list", "--tags", "spec"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("lifecycle"));
+    facts_cmd(&dir)
+        .args(["list", "--tags", "implemented"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("lifecycle"));
+}
+
+#[test]
 fn bare_facts_defaults_to_list() {
     let dir = project("- hello world\n");
     // No subcommand at all
