@@ -7511,3 +7511,172 @@ fn lint_no_warn_config_in_default_file() {
         ".config in .facts should not warn: {stderr}"
     );
 }
+
+// ===========================================================================
+// UX edge cases: non-TTY output, NO_COLOR, subdirectory, conflicts
+// ===========================================================================
+
+#[test]
+fn check_piped_output_has_no_ansi_escapes() {
+    // When stdout is a pipe, output must contain no ANSI escape sequences.
+    let dir = project("- id: cmd1\n  label: a passing fact\n  command: \"true\"\n- manual fact\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("\x1b["),
+        "piped output should not contain ANSI escapes: {stdout}"
+    );
+}
+
+#[test]
+fn check_no_color_env_suppresses_ansi() {
+    // NO_COLOR env var should suppress ANSI codes (https://no-color.org/).
+    // facts_cmd already sets NO_COLOR=1, verify it works.
+    let dir = project("- id: cmd1\n  label: a passing fact\n  command: \"true\"\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("\x1b["),
+        "NO_COLOR should suppress ANSI codes: {stdout}"
+    );
+    assert!(stdout.contains("1 passed"), "should still show results");
+}
+
+#[test]
+fn list_no_color_env_suppresses_ansi() {
+    let dir = project("- a fact\n");
+    let output = facts_cmd(&dir).args(["list"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("\x1b["),
+        "NO_COLOR should suppress ANSI codes in list output: {stdout}"
+    );
+}
+
+#[test]
+fn check_from_subdirectory_finds_root_facts() {
+    // Running check from a subdirectory should find .facts in the project root.
+    let dir = project("- id: sub1\n  label: a fact\n  command: \"true\"\n");
+    let subdir = dir.path().join("src").join("nested");
+    fs::create_dir_all(&subdir).unwrap();
+    let mut cmd = Command::cargo_bin("facts").unwrap();
+    cmd.current_dir(&subdir);
+    cmd.env("NO_COLOR", "1");
+    cmd.env("PATH", "/usr/bin:/bin");
+    cmd.args(["check", "--no-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 passed"));
+}
+
+#[test]
+fn check_agent_and_no_agent_conflict_shows_clear_error() {
+    let dir = project("- manual fact\n");
+    facts_cmd(&dir)
+        .args(["check", "--agent", "echo noop", "--no-agent"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn check_quiet_produces_no_stdout() {
+    let dir = project("- id: q1\n  label: a fact\n  command: \"true\"\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--no-agent", "--quiet"])
+        .output()
+        .unwrap();
+    assert!(
+        output.stdout.is_empty(),
+        "quiet mode should produce no stdout: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(output.status.success());
+}
+
+#[test]
+fn check_quiet_exit_code_nonzero_on_failure() {
+    let dir = project("- id: q2\n  label: a failing fact\n  command: \"false\"\n");
+    let output = facts_cmd(&dir)
+        .args(["check", "--no-agent", "--quiet"])
+        .output()
+        .unwrap();
+    assert!(
+        output.stdout.is_empty(),
+        "quiet mode should produce no stdout even on failure"
+    );
+    assert!(!output.status.success(), "should exit non-zero on failure");
+}
+
+#[test]
+fn check_long_fact_label_displays_without_truncation() {
+    let long_label = "a".repeat(200);
+    let content = format!("- id: lng\n  label: {long_label}\n  command: \"true\"\n");
+    let dir = project(&content);
+    facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&long_label));
+}
+
+#[test]
+fn check_many_manual_facts_batch_progress() {
+    // Generate 25 manual facts (more than default batch size of 10).
+    let mut content = String::new();
+    for i in 0..25 {
+        content.push_str(&format!("- manual fact number {i}\n"));
+    }
+    let dir = project(&content);
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("25 passed"))
+        .stdout(predicate::str::contains("batch"));
+}
+
+#[test]
+fn check_many_manual_facts_custom_batch_size() {
+    // 15 manual facts with batch-size 5 = 3 batches.
+    let mut content = String::new();
+    for i in 0..15 {
+        content.push_str(&format!("- manual fact number {i}\n"));
+    }
+    let dir = project(&content);
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    facts_cmd(&dir)
+        .args(["check", "--agent", &template, "--batch-size", "5"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("15 passed"))
+        .stdout(predicate::str::contains("3 batch"));
+}
+
+#[test]
+fn check_from_subdirectory_with_agent() {
+    // Agent check from a subdirectory should also work.
+    let dir = project("- manual fact from subdir\n");
+    let subdir = dir.path().join("lib");
+    fs::create_dir_all(&subdir).unwrap();
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let mut cmd = Command::cargo_bin("facts").unwrap();
+    cmd.current_dir(&subdir);
+    cmd.env("NO_COLOR", "1");
+    cmd.env("PATH", "/usr/bin:/bin");
+    cmd.args(["check", "--agent", &template])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 passed"))
+        .stdout(predicate::str::contains("(agent)"));
+}

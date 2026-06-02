@@ -7,8 +7,21 @@ use std::sync::OnceLock;
 static USE_COLOR: OnceLock<bool> = OnceLock::new();
 
 /// Whether to use ANSI color codes.
+///
+/// Colors are disabled when:
+/// - stdout is not a TTY (piped, redirected)
+/// - `NO_COLOR` env var is set (any value, per <https://no-color.org/>)
+/// - `TERM` env var is `dumb`
 pub fn enabled() -> bool {
-    *USE_COLOR.get_or_init(|| std::io::stdout().is_terminal())
+    *USE_COLOR.get_or_init(|| {
+        if std::env::var_os("NO_COLOR").is_some() {
+            return false;
+        }
+        if std::env::var("TERM").as_deref() == Ok("dumb") {
+            return false;
+        }
+        std::io::stdout().is_terminal()
+    })
 }
 
 /// ANSI escape: green text.
