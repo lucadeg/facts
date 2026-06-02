@@ -72,6 +72,8 @@ facts check --id abc                    # check a single fact by ID
 facts check --section cli/check         # check one section
 facts check --agent claude              # use an agent for manual facts
 facts check --no-agent                  # skip agent, manual facts stay as ?
+facts check --has-command               # check only facts with commands
+facts check --manual --agent claude     # check only manual facts with agent
 facts check --strict                    # fail on unverified manual facts (CI)
 facts check --strict --agent claude -q  # CI: verify everything, fail on gaps
 facts check -q                          # quiet: exit code only (for CI)
@@ -180,6 +182,8 @@ Rules:
 - `--tags "expr"` — boolean tag filter (e.g. `"ci and not draft"`)
 - `--search "expr"` — full-text search against section + label + tags
 - `--file "name"` — filter to a specific `.facts` file
+- `--has-command` — check only facts with a validation command (skip manual facts)
+- `--manual` — check only manual facts (no validation command). Useful with `--agent`
 - `--depth N` — limit section nesting depth
 - `--timeout <secs>` — per-command and per-agent-batch timeout
 - `--strict` — treat unverified manual facts as failures (non-zero exit). Essential for CI pipelines that require every fact to be verified by command or agent

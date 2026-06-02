@@ -159,6 +159,8 @@ facts check --tags "mvp and not blocked" # filter by tag expression
 facts check --section api/auth           # filter by section path
 facts check --search "auth and rate"     # full-text search filter
 facts check --file api.facts             # filter to one file
+facts check --has-command                 # check only facts with commands
+facts check --manual --agent claude      # check only manual facts with agent
 facts check --depth 2                    # limit section nesting depth
 facts check --timeout 30                 # per-command and per-batch timeout
 facts check --strict                     # fail on unverified manual facts (CI)
