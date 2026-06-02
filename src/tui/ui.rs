@@ -640,12 +640,12 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     ));
 
     if app.check_running {
-        let total = app.check_passed + app.check_failed + app.check_manual;
+        let total = app.check_passed + app.check_failed + app.check_manual + app.check_unresolved;
         spans.push(Span::styled(
             format!(" checking {}/{} ", total, app.check_total_facts),
             Style::default().fg(theme::MANUAL),
         ));
-    } else if app.check_passed + app.check_failed + app.check_manual > 0 {
+    } else if app.check_passed + app.check_failed + app.check_manual + app.check_unresolved > 0 {
         spans.push(Span::styled(
             format!(" {}✓", app.check_passed),
             Style::default().fg(theme::PASS),
@@ -654,10 +654,18 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             format!(" {}✗", app.check_failed),
             Style::default().fg(theme::FAIL),
         ));
-        spans.push(Span::styled(
-            format!(" {}?", app.check_manual),
-            Style::default().fg(theme::MANUAL),
-        ));
+        if app.check_manual > 0 {
+            spans.push(Span::styled(
+                format!(" {}?", app.check_manual),
+                Style::default().fg(theme::MANUAL),
+            ));
+        }
+        if app.check_unresolved > 0 {
+            spans.push(Span::styled(
+                format!(" {}⚠", app.check_unresolved),
+                Style::default().fg(theme::MANUAL),
+            ));
+        }
     }
 
     if !app.status.is_empty() {
@@ -880,15 +888,12 @@ fn draw_detail(frame: &mut Frame, app: &App, area: Rect) {
 
     if let Some(result) = app.check_results.get(&fact.global_index) {
         let (icon, style) = match result {
-            CheckResult::Passed | CheckResult::AgentPassed => {
-                ("✓ PASSED", Style::default().fg(theme::PASS))
-            }
-            CheckResult::Failed(_) | CheckResult::AgentFailed(_) => {
-                ("✗ FAILED", Style::default().fg(theme::FAIL))
-            }
-            CheckResult::Manual | CheckResult::AgentUnresolved => {
-                ("? MANUAL", Style::default().fg(theme::MANUAL))
-            }
+            CheckResult::Passed => ("✓ PASSED", Style::default().fg(theme::PASS)),
+            CheckResult::AgentPassed => ("✓ PASSED (agent)", Style::default().fg(theme::PASS)),
+            CheckResult::Failed(_) => ("✗ FAILED", Style::default().fg(theme::FAIL)),
+            CheckResult::AgentFailed(_) => ("✗ FAILED (agent)", Style::default().fg(theme::FAIL)),
+            CheckResult::Manual => ("? MANUAL", Style::default().fg(theme::MANUAL)),
+            CheckResult::AgentUnresolved => ("? UNRESOLVED", Style::default().fg(theme::MANUAL)),
             CheckResult::AgentPending => ("⟳ CHECKING…", Style::default().fg(theme::ACCENT)),
         };
         lines.push(Line::from(""));
@@ -898,30 +903,52 @@ fn draw_detail(frame: &mut Frame, app: &App, area: Rect) {
         ]));
     }
 
-    if let Some(CheckResult::Failed(stderr) | CheckResult::AgentFailed(stderr)) =
-        app.check_results.get(&fact.global_index)
-        && !stderr.is_empty()
-    {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "─── stderr ───",
-            Style::default()
-                .fg(theme::FAIL)
-                .add_modifier(Modifier::BOLD),
-        )));
-        let line_count = stderr.lines().count();
-        for line in stderr.lines().take(20) {
+    match app.check_results.get(&fact.global_index) {
+        Some(CheckResult::Failed(stderr)) if !stderr.is_empty() => {
+            lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                format!(" {line}"),
-                Style::default().fg(theme::MUTED),
+                "─── stderr ───",
+                Style::default()
+                    .fg(theme::FAIL)
+                    .add_modifier(Modifier::BOLD),
             )));
+            let line_count = stderr.lines().count();
+            for line in stderr.lines().take(20) {
+                lines.push(Line::from(Span::styled(
+                    format!(" {line}"),
+                    Style::default().fg(theme::MUTED),
+                )));
+            }
+            if line_count > 20 {
+                lines.push(Line::from(Span::styled(
+                    format!("  … ({} more lines)", line_count - 20),
+                    Style::default().fg(theme::MUTED),
+                )));
+            }
         }
-        if line_count > 20 {
+        Some(CheckResult::AgentFailed(reason)) if !reason.is_empty() => {
+            lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                format!("  … ({} more lines)", line_count - 20),
-                Style::default().fg(theme::MUTED),
+                "─── reason ───",
+                Style::default()
+                    .fg(theme::FAIL)
+                    .add_modifier(Modifier::BOLD),
             )));
+            for line in reason.lines().take(20) {
+                lines.push(Line::from(Span::styled(
+                    format!(" {line}"),
+                    Style::default().fg(theme::MUTED),
+                )));
+            }
+            let line_count = reason.lines().count();
+            if line_count > 20 {
+                lines.push(Line::from(Span::styled(
+                    format!("  … ({} more lines)", line_count - 20),
+                    Style::default().fg(theme::MUTED),
+                )));
+            }
         }
+        _ => {}
     }
 
     let detail = Paragraph::new(lines)

@@ -114,6 +114,7 @@ pub struct App {
     pub check_passed: usize,
     pub check_failed: usize,
     pub check_manual: usize,
+    pub check_unresolved: usize,
     pub check_running: bool,
     pub check_total_facts: usize,
 
@@ -156,6 +157,7 @@ impl App {
             check_passed: 0,
             check_failed: 0,
             check_manual: 0,
+            check_unresolved: 0,
             check_running: false,
             check_total_facts: 0,
             status: String::new(),
@@ -233,6 +235,7 @@ impl App {
         self.check_passed = 0;
         self.check_failed = 0;
         self.check_manual = 0;
+        self.check_unresolved = 0;
         self.check_total_facts = 0;
         self.rebuild_tree();
         self.rebuild_filter();
@@ -989,6 +992,7 @@ impl App {
         self.check_passed = 0;
         self.check_failed = 0;
         self.check_manual = 0;
+        self.check_unresolved = 0;
         self.check_running = true;
         self.status = "Running checks…".to_string();
 
@@ -1136,19 +1140,23 @@ impl App {
         if let Some(ref rx) = self.check_rx {
             while let Ok((idx, status)) = rx.try_recv() {
                 let prev = self.check_results.get(&idx);
-                if let Some(CheckResult::Manual) = prev {
-                    self.check_manual -= 1;
+                match prev {
+                    Some(CheckResult::Manual) => self.check_manual -= 1,
+                    Some(CheckResult::AgentUnresolved) => self.check_unresolved -= 1,
+                    _ => {}
                 }
                 match &status {
                     CheckResult::Passed | CheckResult::AgentPassed => self.check_passed += 1,
                     CheckResult::Failed(_) | CheckResult::AgentFailed(_) => self.check_failed += 1,
-                    CheckResult::Manual | CheckResult::AgentUnresolved => self.check_manual += 1,
+                    CheckResult::Manual => self.check_manual += 1,
+                    CheckResult::AgentUnresolved => self.check_unresolved += 1,
                     CheckResult::AgentPending => {}
                 }
                 self.check_results.insert(idx, status);
             }
 
-            let total = self.check_passed + self.check_failed + self.check_manual;
+            let total =
+                self.check_passed + self.check_failed + self.check_manual + self.check_unresolved;
             let pending = self
                 .check_results
                 .values()
@@ -1158,10 +1166,17 @@ impl App {
                 self.check_running = false;
                 self.check_rx = None;
                 self.check_cancel = None;
-                self.status = format!(
-                    "Check: {} passed, {} failed, {} manual",
-                    self.check_passed, self.check_failed, self.check_manual
-                );
+                let mut parts = vec![
+                    format!("{} passed", self.check_passed),
+                    format!("{} failed", self.check_failed),
+                ];
+                if self.check_manual > 0 {
+                    parts.push(format!("{} manual", self.check_manual));
+                }
+                if self.check_unresolved > 0 {
+                    parts.push(format!("{} unresolved", self.check_unresolved));
+                }
+                self.status = format!("Check: {}", parts.join(", "));
             }
         }
     }
@@ -2101,7 +2116,7 @@ mod tests {
     }
 
     #[test]
-    fn test_process_check_results_agent_unresolved_counted_as_manual() {
+    fn test_process_check_results_agent_unresolved_counted_separately() {
         let (_dir, mut app) = temp_app("- manual fact\n");
         let (tx, rx) = mpsc::channel();
         app.check_rx = Some(rx);
@@ -2114,7 +2129,8 @@ mod tests {
         drop(tx);
 
         app.process_check_results();
-        assert_eq!(app.check_manual, 1);
+        assert_eq!(app.check_unresolved, 1);
+        assert_eq!(app.check_manual, 0);
         assert_eq!(app.check_passed, 0);
         assert_eq!(app.check_failed, 0);
         assert!(!app.check_running);
@@ -2280,5 +2296,57 @@ mod tests {
         assert_eq!(app.check_passed, 0);
         assert_eq!(app.check_failed, 0);
         assert_eq!(app.check_manual, 0);
+        assert_eq!(app.check_unresolved, 0);
+    }
+
+    #[test]
+    fn test_status_message_omits_zero_manual_and_unresolved() {
+        let (_dir, mut app) = temp_app("- label: fact\n  command: true\n");
+        app.start_check();
+        let start = std::time::Instant::now();
+        while app.check_running && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            app.process_check_results();
+        }
+        assert!(!app.check_running);
+        assert!(app.status.contains("1 passed"));
+        assert!(app.status.contains("0 failed"));
+        // manual and unresolved are 0, so should not appear in status
+        assert!(
+            !app.status.contains("manual"),
+            "status should omit manual when 0: {}",
+            app.status
+        );
+        assert!(
+            !app.status.contains("unresolved"),
+            "status should omit unresolved when 0: {}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn test_status_message_shows_unresolved_when_nonzero() {
+        let (_dir, mut app) = temp_app("- manual fact\n");
+        let (tx, rx) = mpsc::channel();
+        app.check_rx = Some(rx);
+        app.check_running = true;
+        app.check_total_facts = 1;
+
+        tx.send((0, CheckResult::Manual)).unwrap();
+        tx.send((0, CheckResult::AgentPending)).unwrap();
+        tx.send((0, CheckResult::AgentUnresolved)).unwrap();
+        drop(tx);
+
+        app.process_check_results();
+        assert!(
+            app.status.contains("1 unresolved"),
+            "status should show unresolved count: {}",
+            app.status
+        );
+        assert!(
+            !app.status.contains("manual"),
+            "status should not show manual when 0: {}",
+            app.status
+        );
     }
 }
