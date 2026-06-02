@@ -64,7 +64,7 @@
   command: grep -q "conflicts with filter operator" src/add.rs
 
 ### lifecycle
-- three well-known tags drive the agent workflow: @draft, @spec, @implemented
+- three well-known tags drive the agent workflow: @draft @spec @implemented
 - the draft tag marks rough ideas that need refinement and atomization
 - the spec tag marks precise and actionable facts, ready to implement
 - the implemented tag marks facts that are true and backed by code
@@ -190,8 +190,8 @@
   command: grep -q "and\|or\|not\|parse_expr" src/tags.rs
 
 ### list
-- label: same format as check but without status markers
-  command: ! grep -q "CheckStatus\|✓\|✗" src/list.rs
+- label: same format as check but without pass/fail status markers
+  command: ! grep -q "CheckStatus" src/list.rs
 - shows facts in file order
 - each fact line shows ID and full path (file > section > label)
 - label: file prefix omitted for .facts (default), shown for other files

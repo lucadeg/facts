@@ -149,6 +149,7 @@ fn build_prompt(facts: &[ManualFact]) -> String {
         "You are verifying facts about a codebase. Each fact below is an atomic truth claim. Read the relevant source files, configs, and project state to determine whether each fact holds.".to_string(),
         String::new(),
         "For EVERY fact, respond with exactly one XML verdict tag. Do not skip any.".to_string(),
+        "Use the EXACT fact id shown in brackets. Do not truncate or modify it.".to_string(),
         "- True:  <fact-verdict id=\"ID\">PASS</fact-verdict>".to_string(),
         "- False: <fact-verdict id=\"ID\">FAIL one-line reason</fact-verdict>".to_string(),
         String::new(),
