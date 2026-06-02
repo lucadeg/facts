@@ -436,6 +436,7 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
                         id: id.clone(),
                         label: fact.label.clone(),
                         section_path: section_path.join("/"),
+                        filename: sheet.filename.clone(),
                     });
                     manual_indices.push(results.len());
                     CheckStatus::Manual

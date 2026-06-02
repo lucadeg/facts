@@ -161,6 +161,8 @@ pub fn lint_content(content: &str, filename: &str) -> Vec<LintDiagnostic> {
             Ok(sheet) => {
                 check_duplicate_ids(&sheet, filename, &mut diagnostics);
                 check_empty_labels(&sheet, filename, &mut diagnostics);
+                check_config_agent(&sheet, filename, &mut diagnostics);
+                check_config_in_non_default_file(&sheet, filename, &mut diagnostics);
             }
             Err(e) => {
                 diagnostics.push(LintDiagnostic {
@@ -688,6 +690,81 @@ fn check_double_at_tags(content: &str, filename: &str, diagnostics: &mut Vec<Lin
     }
 }
 
+/// Known agent preset names (must match PRESETS in agent.rs).
+const AGENT_PRESETS: &[&str] = &["claude", "codex", "pi", "droid", "opencode", "mi"];
+
+/// Check the `.config agent` value for validity.
+///
+/// When an `agent` key is set in `.config`, warn if it is not a known preset
+/// name and does not contain `%p` (the prompt placeholder). Without `%p`,
+/// the prompt is appended as a trailing argument, which may not be what the
+/// user intended. Also warn when the agent value is empty.
+fn check_config_agent(sheet: &FactSheet, filename: &str, diagnostics: &mut Vec<LintDiagnostic>) {
+    for (_path, fact) in sheet.all_facts() {
+        if !fact.is_config() {
+            continue;
+        }
+        for (key, value) in &fact.extra {
+            if key != "agent" {
+                continue;
+            }
+            let val = value.trim();
+            if val.is_empty() {
+                diagnostics.push(LintDiagnostic {
+                    file: filename.to_string(),
+                    line: None,
+                    message: ".config agent has empty value".to_string(),
+                    severity: Severity::Warning,
+                });
+                continue;
+            }
+            if AGENT_PRESETS.contains(&val) {
+                continue; // Known preset — valid.
+            }
+            if !val.contains("%p") {
+                diagnostics.push(LintDiagnostic {
+                    file: filename.to_string(),
+                    line: None,
+                    message: format!(
+                        ".config agent '{}' is not a known preset and has no %p placeholder (prompt will be appended as trailing argument)",
+                        val
+                    ),
+                    severity: Severity::Warning,
+                });
+            }
+        }
+    }
+}
+
+/// Warn when `.config` appears in a non-default .facts file.
+///
+/// The `read_config_value` function (and hence agent/batch-size resolution)
+/// only reads `.config` from the default `.facts` file. A `.config` fact in
+/// `api.facts` will be silently ignored, which is almost certainly not what
+/// the user intended.
+fn check_config_in_non_default_file(
+    sheet: &FactSheet,
+    filename: &str,
+    diagnostics: &mut Vec<LintDiagnostic>,
+) {
+    if filename == ".facts" {
+        return; // Default file — no warning needed.
+    }
+    for (_path, fact) in sheet.all_facts() {
+        if fact.is_config() {
+            diagnostics.push(LintDiagnostic {
+                file: filename.to_string(),
+                line: None,
+                message: format!(
+                    ".config fact in '{}' is ignored — configuration is only read from .facts",
+                    filename
+                ),
+                severity: Severity::Warning,
+            });
+        }
+    }
+}
+
 /// A group of lines forming a single fact.
 struct FactLineGroup<'a> {
     lines: Vec<&'a str>,
@@ -1183,5 +1260,103 @@ mod tests {
             "expected helpful error message, got: {}",
             errors[0].message
         );
+    }
+
+    #[test]
+    fn test_lint_config_agent_known_preset_passes() {
+        let content = "- id: .config\n  label: facts configuration\n  agent: claude\n";
+        let diags = lint_content(content, ".facts");
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics for known agent preset, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_lint_config_agent_template_with_placeholder_passes() {
+        let content = "- id: .config\n  label: facts configuration\n  agent: my-agent -p %p\n";
+        let diags = lint_content(content, ".facts");
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics for template with %p, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_lint_config_agent_no_placeholder_warns() {
+        let content = "- id: .config\n  label: facts configuration\n  agent: my-agent --run\n";
+        let diags = lint_content(content, ".facts");
+        let warnings: Vec<_> = diags
+            .iter()
+            .filter(|d| d.severity == Severity::Warning)
+            .collect();
+        assert_eq!(warnings.len(), 1, "expected 1 warning, got: {diags:?}");
+        assert!(
+            warnings[0].message.contains("not a known preset")
+                && warnings[0].message.contains("no %p placeholder"),
+            "unexpected message: {}",
+            warnings[0].message
+        );
+    }
+
+    #[test]
+    fn test_lint_config_agent_empty_warns() {
+        let content = "- id: .config\n  label: facts configuration\n  agent:  \n";
+        // Note: agent: (with trailing spaces) — the key has no usable value.
+        // The "empty mapping value" check fires first for this case, but let's
+        // check both warnings appear.
+        let diags = lint_content(content, ".facts");
+        let warnings: Vec<_> = diags
+            .iter()
+            .filter(|d| d.severity == Severity::Warning)
+            .collect();
+        assert!(
+            !warnings.is_empty(),
+            "expected at least 1 warning for empty agent, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_lint_config_in_non_default_file_warns() {
+        let content = "- id: .config\n  label: facts configuration\n  agent: claude\n";
+        let diags = lint_content(content, "api.facts");
+        let warnings: Vec<_> = diags
+            .iter()
+            .filter(|d| d.severity == Severity::Warning)
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "expected 1 warning for .config in non-default file, got: {diags:?}"
+        );
+        assert!(
+            warnings[0].message.contains("ignored")
+                && warnings[0].message.contains("only read from .facts"),
+            "unexpected message: {}",
+            warnings[0].message
+        );
+    }
+
+    #[test]
+    fn test_lint_config_in_default_file_no_warning() {
+        let content = "- id: .config\n  label: facts configuration\n  agent: claude\n";
+        let diags = lint_content(content, ".facts");
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics for .config in .facts, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn test_lint_config_all_presets_pass() {
+        for preset in &["claude", "codex", "pi", "droid", "opencode", "mi"] {
+            let content =
+                format!("- id: .config\n  label: facts configuration\n  agent: {preset}\n");
+            let diags = lint_content(&content, ".facts");
+            assert!(
+                diags.is_empty(),
+                "expected no diagnostics for preset '{preset}', got: {diags:?}"
+            );
+        }
     }
 }

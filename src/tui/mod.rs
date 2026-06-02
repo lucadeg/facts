@@ -1012,6 +1012,7 @@ impl App {
             id: String,
             label: String,
             section_path: String,
+            filename: String,
         }
         let facts: Vec<CheckFact> = checkable
             .iter()
@@ -1021,6 +1022,7 @@ impl App {
                 id: f.id.clone(),
                 label: f.label.clone(),
                 section_path: f.section_cli_path(),
+                filename: f.filename.clone(),
             })
             .collect();
         let root = self.project_root.clone();
@@ -1061,6 +1063,7 @@ impl App {
                                 id: fact.id.clone(),
                                 label: fact.label.clone(),
                                 section_path: fact.section_path.clone(),
+                                filename: fact.filename.clone(),
                             },
                         ));
                         CheckResult::Manual
@@ -1096,6 +1099,7 @@ impl App {
                             id: mf.id.clone(),
                             label: mf.label.clone(),
                             section_path: mf.section_path.clone(),
+                            filename: mf.filename.clone(),
                         })
                         .collect();
                     let result = crate::agent::run_batch(&agent.template, &batch, &root, timeout);

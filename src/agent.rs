@@ -45,6 +45,8 @@ pub struct ManualFact {
     pub id: String,
     pub label: String,
     pub section_path: String,
+    /// Source filename (e.g. ".facts", "api.facts"). Used in multi-file prompts.
+    pub filename: String,
 }
 
 /// Result of agent verification for a single fact.
@@ -154,11 +156,21 @@ fn build_prompt(facts: &[ManualFact]) -> String {
         String::new(),
     ];
 
+    // Include file prefix when facts span multiple files.
+    let multi_file = facts.iter().any(|f| f.filename != facts[0].filename);
+
     for fact in facts {
-        let path = if fact.section_path.is_empty() {
+        let mut parts = Vec::new();
+        if multi_file && !fact.filename.is_empty() {
+            parts.push(fact.filename.as_str());
+        }
+        if !fact.section_path.is_empty() {
+            parts.push(fact.section_path.as_str());
+        }
+        let path = if parts.is_empty() {
             fact.label.clone()
         } else {
-            format!("{} > {}", fact.section_path, fact.label)
+            format!("{} > {}", parts.join(" > "), fact.label)
         };
         lines.push(format!("- [{}] {}", fact.id, path));
     }
@@ -488,6 +500,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
@@ -500,6 +513,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(
@@ -514,6 +528,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(matches!(result.verdicts[0].1, AgentVerdict::Unresolved));
@@ -529,6 +544,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
@@ -556,11 +572,13 @@ mod tests {
                 id: "abc".to_string(),
                 label: "some fact".to_string(),
                 section_path: "cli/check".to_string(),
+                filename: String::new(),
             },
             ManualFact {
                 id: "def".to_string(),
                 label: "another fact".to_string(),
                 section_path: String::new(),
+                filename: String::new(),
             },
         ];
         let prompt = build_prompt(&facts);
@@ -578,16 +596,19 @@ mod tests {
                 id: "a".to_string(),
                 label: "one".to_string(),
                 section_path: String::new(),
+                filename: String::new(),
             },
             ManualFact {
                 id: "b".to_string(),
                 label: "two".to_string(),
                 section_path: String::new(),
+                filename: String::new(),
             },
             ManualFact {
                 id: "c".to_string(),
                 label: "three".to_string(),
                 section_path: String::new(),
+                filename: String::new(),
             },
         ];
         let prompt = build_prompt(&facts);
@@ -603,6 +624,7 @@ mod tests {
             id: "x".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let prompt = build_prompt(&facts);
         assert!(
@@ -637,16 +659,19 @@ mod tests {
                 id: "a1".to_string(),
                 label: "one".to_string(),
                 section_path: String::new(),
+                filename: String::new(),
             },
             ManualFact {
                 id: "b2".to_string(),
                 label: "two".to_string(),
                 section_path: String::new(),
+                filename: String::new(),
             },
             ManualFact {
                 id: "c3".to_string(),
                 label: "three".to_string(),
                 section_path: String::new(),
+                filename: String::new(),
             },
         ];
         let result = parse_verdicts(output, &facts);
@@ -665,6 +690,7 @@ mod tests {
             id: "x".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
@@ -762,6 +788,7 @@ mod tests {
             id: "abc".to_string(),
             label: "supports unicode \u{1F680} labels".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let prompt = build_prompt(&facts);
         assert!(
@@ -776,6 +803,7 @@ mod tests {
             id: "abc".to_string(),
             label: "fact with `backticks` and $vars and \"quotes\"".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let prompt = build_prompt(&facts);
         assert!(
@@ -799,6 +827,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         match &result.verdicts[0].1 {
@@ -845,11 +874,13 @@ mod tests {
                 id: "abc".to_string(),
                 label: "test one".to_string(),
                 section_path: String::new(),
+                filename: String::new(),
             },
             ManualFact {
                 id: "def".to_string(),
                 label: "test two".to_string(),
                 section_path: String::new(),
+                filename: String::new(),
             },
         ];
         let result = parse_verdicts(output, &facts);
@@ -865,6 +896,7 @@ mod tests {
             id: "xyz".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
@@ -878,6 +910,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(
@@ -895,6 +928,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(
@@ -912,6 +946,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
@@ -926,6 +961,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
@@ -941,6 +977,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         // No closing tag found, so the fact stays unresolved
@@ -956,11 +993,13 @@ mod tests {
                 id: "a".to_string(),
                 label: "one".to_string(),
                 section_path: String::new(),
+                filename: String::new(),
             },
             ManualFact {
                 id: "b".to_string(),
                 label: "two".to_string(),
                 section_path: String::new(),
+                filename: String::new(),
             },
         ];
         let result = parse_verdicts(output, &facts);
@@ -976,6 +1015,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(
@@ -994,6 +1034,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(&output, &facts);
         assert!(matches!(result.verdicts[0].1, AgentVerdict::Fail(ref r) if r.len() == 5000));
@@ -1007,6 +1048,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(
@@ -1024,6 +1066,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(
@@ -1041,6 +1084,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(
@@ -1058,6 +1102,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
@@ -1071,6 +1116,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         // The parser looks for </fact-verdict> closing tag, so > in the reason is fine
@@ -1089,6 +1135,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         // The "abc" fact should be unresolved since no verdict matched it
@@ -1103,6 +1150,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         let result = parse_verdicts(output, &facts);
         assert!(matches!(result.verdicts[0].1, AgentVerdict::Pass));
@@ -1117,21 +1165,25 @@ mod tests {
                 id: "a".to_string(),
                 label: "one".to_string(),
                 section_path: String::new(),
+                filename: String::new(),
             },
             ManualFact {
                 id: "b".to_string(),
                 label: "two".to_string(),
                 section_path: String::new(),
+                filename: String::new(),
             },
             ManualFact {
                 id: "c".to_string(),
                 label: "three".to_string(),
                 section_path: String::new(),
+                filename: String::new(),
             },
             ManualFact {
                 id: "d".to_string(),
                 label: "four".to_string(),
                 section_path: String::new(),
+                filename: String::new(),
             },
         ];
         let result = parse_verdicts(output, &facts);
@@ -1149,6 +1201,7 @@ mod tests {
             id: "abc".to_string(),
             label: "test fact".to_string(),
             section_path: String::new(),
+            filename: String::new(),
         }];
         // Use "echo" as template (no %p). The prompt is appended as argument.
         let result = run_batch("echo", &facts, Path::new("."), None);
@@ -1161,6 +1214,95 @@ mod tests {
             result.error.is_none(),
             "echo command should not error: {:?}",
             result.error
+        );
+    }
+
+    // =========================================================================
+    // Multi-file prompt tests
+    // =========================================================================
+
+    #[test]
+    fn test_build_prompt_single_file_omits_filename() {
+        // When all facts are from the same file, the filename is not shown.
+        let facts = vec![
+            ManualFact {
+                id: "a".to_string(),
+                label: "fact one".to_string(),
+                section_path: "cli".to_string(),
+                filename: ".facts".to_string(),
+            },
+            ManualFact {
+                id: "b".to_string(),
+                label: "fact two".to_string(),
+                section_path: "cli".to_string(),
+                filename: ".facts".to_string(),
+            },
+        ];
+        let prompt = build_prompt(&facts);
+        // Should show section > label but NOT the filename
+        assert!(
+            prompt.contains("cli > fact one"),
+            "prompt should contain section path: {prompt}"
+        );
+        assert!(
+            !prompt.contains(".facts >"),
+            "single-file prompt should not include filename prefix: {prompt}"
+        );
+    }
+
+    #[test]
+    fn test_build_prompt_multi_file_includes_filename() {
+        // When facts span multiple files, each line should include the filename.
+        let facts = vec![
+            ManualFact {
+                id: "a".to_string(),
+                label: "fact one".to_string(),
+                section_path: "cli".to_string(),
+                filename: ".facts".to_string(),
+            },
+            ManualFact {
+                id: "b".to_string(),
+                label: "fact two".to_string(),
+                section_path: "api".to_string(),
+                filename: "api.facts".to_string(),
+            },
+        ];
+        let prompt = build_prompt(&facts);
+        assert!(
+            prompt.contains(".facts > cli > fact one"),
+            "multi-file prompt should include .facts filename: {prompt}"
+        );
+        assert!(
+            prompt.contains("api.facts > api > fact two"),
+            "multi-file prompt should include api.facts filename: {prompt}"
+        );
+    }
+
+    #[test]
+    fn test_build_prompt_multi_file_no_section_path() {
+        // Multi-file fact with no section path should still show filename.
+        let facts = vec![
+            ManualFact {
+                id: "a".to_string(),
+                label: "preamble fact".to_string(),
+                section_path: String::new(),
+                filename: ".facts".to_string(),
+            },
+            ManualFact {
+                id: "b".to_string(),
+                label: "api fact".to_string(),
+                section_path: String::new(),
+                filename: "api.facts".to_string(),
+            },
+        ];
+        let prompt = build_prompt(&facts);
+        assert!(
+            prompt.contains(".facts > preamble fact"),
+            "prompt should show filename for preamble fact: {prompt}"
+        );
+        assert!(
+            prompt.contains("api.facts > api fact"),
+            "prompt should show filename for api fact: {prompt}"
         );
     }
 }

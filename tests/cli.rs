@@ -7256,3 +7256,258 @@ fn check_all_filters_combined_with_agent() {
         "default file fact should be filtered: {stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Multi-file agent check integration tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check_agent_multi_file_checks_all_manual_facts() {
+    // Agent should check manual facts from ALL auto-discovered .facts files.
+    let dir = project("- default manual fact\n");
+    fs::write(dir.path().join("api.facts"), "- api manual fact\n").unwrap();
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "should pass: {stdout}");
+    assert!(
+        stdout.contains("Verifying 2 manual"),
+        "expected 2 manual facts from both files: {stdout}"
+    );
+    assert!(
+        stdout.contains("default manual fact"),
+        "should check .facts manual fact: {stdout}"
+    );
+    assert!(
+        stdout.contains("api manual fact"),
+        "should check api.facts manual fact: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_multi_file_verbose_shows_file_in_prompt() {
+    // With --verbose, the agent prompt should include filenames when facts span multiple files.
+    let dir = project("- fact from default\n");
+    fs::write(dir.path().join("api.facts"), "- fact from api\n").unwrap();
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template, "--verbose"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // In multi-file mode, the prompt should contain filename prefixes.
+    assert!(
+        stdout.contains(".facts") && stdout.contains("api.facts"),
+        "verbose prompt should mention both filenames: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_single_file_omits_filename_in_prompt() {
+    // With --verbose on a single file, the prompt should NOT include the filename prefix.
+    let dir = project("- fact one\n- fact two\n");
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template, "--verbose"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Single-file mode should not show ".facts >" prefix
+    assert!(
+        !stdout.contains(".facts >"),
+        "single-file prompt should not show filename prefix: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_config_in_default_file_used() {
+    // .config agent in .facts should be used for all files.
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    let script = pass_all_agent_script(&dir);
+    let config_content = format!(
+        "- id: .config\n  label: facts configuration\n  agent: {script} %p\n- default manual fact\n"
+    );
+    fs::write(dir.path().join(".facts"), &config_content).unwrap();
+    fs::write(dir.path().join("api.facts"), "- api manual fact\n").unwrap();
+    let output = facts_cmd(&dir).args(["check"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "should pass: {stdout}");
+    assert!(
+        stdout.contains("Verifying 2 manual"),
+        "agent from .config should verify manual facts from all files: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_config_in_non_default_file_ignored() {
+    // .config in api.facts should be ignored for agent resolution.
+    // Without a real agent on PATH, manual facts should remain as ?.
+    let dir = project("- default manual fact\n");
+    let script = pass_all_agent_script(&dir);
+    fs::write(
+        dir.path().join("api.facts"),
+        &format!(
+            "- id: .config\n  label: facts configuration\n  agent: {script} %p\n- api manual fact\n"
+        ),
+    )
+    .unwrap();
+    let output = facts_cmd(&dir)
+        .args(["check", "--no-agent"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Both facts should be manual (no agent used) since we pass --no-agent
+    // to avoid auto-detection, simulating the case where config in api.facts is ignored.
+    assert!(
+        stdout.contains("2 manual"),
+        "facts should remain manual when agent is in non-default file: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_cli_flag_overrides_config_in_multi_file() {
+    // --agent flag should override .config agent, even across multiple files.
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    let bad_script = failing_agent_script(&dir);
+    let good_script = pass_all_agent_script(&dir);
+    // .config points to a failing agent, but CLI flag overrides.
+    fs::write(
+        dir.path().join(".facts"),
+        &format!(
+            "- id: .config\n  label: facts configuration\n  agent: {bad_script} %p\n- default fact\n"
+        ),
+    )
+    .unwrap();
+    fs::write(dir.path().join("api.facts"), "- api fact\n").unwrap();
+    let template = format!("{good_script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "CLI flag should override failing .config agent: {stdout}"
+    );
+    assert!(
+        stdout.contains("2 passed"),
+        "both facts should pass with overridden agent: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_multi_file_batch_display_shows_file_prefix() {
+    // When check runs on multiple files, the output should show the file prefix
+    // for non-default files so users know which file each fact comes from.
+    let dir = project("- default fact\n");
+    fs::write(dir.path().join("api.facts"), "- api fact\n").unwrap();
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // The api.facts fact should have a file prefix in its display path.
+    assert!(
+        stdout.contains("api.facts"),
+        "output should show api.facts prefix for non-default file: {stdout}"
+    );
+}
+
+#[test]
+fn check_agent_multi_file_mixed_command_and_manual() {
+    // Mix of command and manual facts across multiple files.
+    let dir = project("- label: cmd fact\n  command: \"true\"\n- default manual fact\n");
+    fs::write(
+        dir.path().join("api.facts"),
+        "- label: api cmd\n  command: \"true\"\n- api manual fact\n",
+    )
+    .unwrap();
+    let script = pass_all_agent_script(&dir);
+    let template = format!("{script} %p");
+    let output = facts_cmd(&dir)
+        .args(["check", "--agent", &template])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "all should pass: {stdout}");
+    assert!(
+        stdout.contains("4 passed"),
+        "expected 4 total passed (2 cmd + 2 agent): {stdout}"
+    );
+    assert!(
+        stdout.contains("Verifying 2 manual"),
+        "expected 2 manual facts: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Lint agent-related integration tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_warns_config_agent_no_placeholder() {
+    let dir = project("- id: .config\n  label: facts configuration\n  agent: my-tool --run\n");
+    facts_cmd(&dir)
+        .args(["lint"])
+        .assert()
+        .success() // warnings don't cause failure
+        .stderr(predicate::str::contains("not a known preset"))
+        .stderr(predicate::str::contains("no %p placeholder"));
+}
+
+#[test]
+fn lint_passes_config_agent_known_preset() {
+    let dir = project("- id: .config\n  label: facts configuration\n  agent: claude\n");
+    facts_cmd(&dir)
+        .args(["lint"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 file"));
+}
+
+#[test]
+fn lint_passes_config_agent_with_placeholder() {
+    let dir = project("- id: .config\n  label: facts configuration\n  agent: my-agent -p %p\n");
+    facts_cmd(&dir)
+        .args(["lint"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 file"));
+}
+
+#[test]
+fn lint_warns_config_in_non_default_file() {
+    let dir = project("- a fact\n");
+    fs::write(
+        dir.path().join("api.facts"),
+        "- id: .config\n  label: facts configuration\n  agent: claude\n",
+    )
+    .unwrap();
+    facts_cmd(&dir)
+        .args(["lint"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("ignored"))
+        .stderr(predicate::str::contains("only read from .facts"));
+}
+
+#[test]
+fn lint_no_warn_config_in_default_file() {
+    let dir = project("- id: .config\n  label: facts configuration\n  agent: claude\n- a fact\n");
+    let output = facts_cmd(&dir).args(["lint"]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("ignored"),
+        ".config in .facts should not warn: {stderr}"
+    );
+}
