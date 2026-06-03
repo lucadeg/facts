@@ -5780,14 +5780,33 @@ fn check_agent_preset_name_accepted() {
 }
 
 #[test]
+fn check_without_agent_flag_skips_config_agent() {
+    let dir =
+        project("- id: .config\n  label: facts configuration\n  agent: echo PASS\n- manual fact\n");
+    let output = facts_cmd(&dir).args(["check"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "bare check should pass when only manual facts fail to verify via command: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Verifying"),
+        "bare check must not invoke agent even when .config agent is set: {stdout}"
+    );
+    assert!(
+        stdout.contains("manual"),
+        "manual facts should be reported: {stdout}"
+    );
+}
+
+#[test]
 fn check_agent_config_override() {
     // Set agent in .config, verify it's used.
     let dir =
         project("- id: .config\n  label: facts configuration\n  agent: echo PASS\n- manual fact\n");
-    // With restricted PATH and no --agent, should fall back to .config agent.
-    // The agent is "echo PASS" which won't produce valid verdict XML, so facts are unresolved.
+    // Bare --agent uses .config agent. "echo PASS" won't produce valid verdict XML.
     facts_cmd(&dir)
-        .args(["check"])
+        .args(["check", "--agent"])
         .assert()
         .failure()
         .stdout(predicate::str::contains("unresolved"));
@@ -6499,13 +6518,13 @@ fn config_set_help_mentions_agent_presets() {
 }
 
 #[test]
-fn check_help_mentions_auto_detection() {
+fn check_help_mentions_agent_opt_in() {
     let dir = project("- fact\n");
     let output = facts_cmd(&dir).args(["check", "--help"]).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("auto-detect"),
-        "check help should mention agent auto-detection: {stdout}"
+        stdout.contains("opt-in") || stdout.contains("Without this flag"),
+        "check help should state agent verification is opt-in: {stdout}"
     );
 }
 
@@ -6539,8 +6558,8 @@ fn check_no_agent_help_mentions_suppression() {
     let output = facts_cmd(&dir).args(["check", "--help"]).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("Suppress") || stdout.contains("suppress"),
-        "check --no-agent help should mention suppression: {stdout}"
+        stdout.contains("Skip") || stdout.contains("skip"),
+        "check --no-agent help should mention skipping agent: {stdout}"
     );
 }
 
@@ -7449,12 +7468,12 @@ fn check_agent_config_in_default_file_used() {
     );
     fs::write(dir.path().join(".facts"), &config_content).unwrap();
     fs::write(dir.path().join("api.facts"), "- api manual fact\n").unwrap();
-    let output = facts_cmd(&dir).args(["check"]).output().unwrap();
+    let output = facts_cmd(&dir).args(["check", "--agent"]).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "should pass: {stdout}");
     assert!(
         stdout.contains("Verifying 2 manual"),
-        "agent from .config should verify manual facts from all files: {stdout}"
+        "check --agent should use .config agent for manual facts from all files: {stdout}"
     );
 }
 

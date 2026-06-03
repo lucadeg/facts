@@ -629,13 +629,16 @@
 - label: unresolved agent facts cause non-zero exit, same as command failures
   command: grep -q 'agent_unresolved > 0' src/check.rs
   tags: [implemented]
-- label: when no --agent flag and no .config agent key, auto-detects by scanning PATH for preset binaries in order
-  command: grep -q 'auto_detect_agent' src/agent.rs && grep -q 'which_exists' src/agent.rs
+- label: bare facts check does not invoke an agent; manual facts stay manual even when .config agent is set
+  command: cargo test check_without_agent_flag_skips_config_agent -- --nocapture 2>&1 | grep -q 'ok'
   tags: [implemented]
-- label: .config agent key overrides auto-detection, --agent flag overrides both
-  command: grep -q 'read_config_value.*agent' src/agent.rs && grep -q 'if let Some(agent) = flag' src/agent.rs
+- label: with --agent passed, bare value uses .config agent then PATH preset auto-detect in order
+  command: grep -q 'auto_detect_agent' src/agent.rs && cargo test check_agent_config_override -- --nocapture 2>&1 | grep -q 'ok'
   tags: [implemented]
-- label: no-agent flag suppresses agent auto-detection and skips agent verification entirely
+- label: explicit --agent value overrides .config agent
+  command: cargo test check_agent_cli_flag_overrides_config_in_multi_file -- --nocapture 2>&1 | grep -q 'ok'
+  tags: [implemented]
+- label: no-agent flag skips agent verification even when --agent is passed
   command: cargo run -- check --no-agent --help 2>&1 | grep -q 'no-agent'
   tags: [implemented]
 - label: check prints agent announcement before starting agent phase: agent name and manual fact count
@@ -759,10 +762,10 @@
   tags: [implemented]
 
 ### check
-- TUI check automatically sends manual facts to an agent using the same resolution: --agent flag > .config agent > PATH auto-detect @implemented
+- TUI check does not invoke an agent by default; manual facts stay ? unless agent verification is enabled in the TUI @implemented
+- when TUI agent verification is enabled, resolution matches bare facts check --agent: .config agent then PATH auto-detect @implemented
 - TUI shows a spinner on each manual fact while the agent batch is in flight, replacing the ? marker @implemented
 - TUI replaces spinner with PASS/FAIL result as each fact-verdict is parsed from agent output @implemented
-- if no agent is available (none in PATH, no .config), TUI check skips manual facts and shows ? as before @implemented
 
 ## config
 - facts config subcommand manages the .config fact: get, set, show, ls, rm @implemented

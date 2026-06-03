@@ -66,12 +66,13 @@ facts list --light                      # or the alias: facts ll
 
 **Validate:**
 ```
-facts check
+facts check                             # default: command-facts only; manual stay ?
 facts check --tags "ci"
 facts check --id abc                    # check a single fact by ID
 facts check --section cli/check         # check one section
-facts check --agent claude              # use an agent for manual facts
-facts check --no-agent                  # skip agent, manual facts stay as ?
+facts check --agent                     # opt in: .config agent or PATH preset
+facts check --agent claude              # opt in: specific agent
+facts check --no-agent                  # explicit skip (redundant with default)
 facts check --has-command               # check only facts with commands
 facts check --manual --agent claude     # check only manual facts with agent
 facts check --strict                    # fail on unverified manual facts (CI)
@@ -147,10 +148,12 @@ The lifecycle flows `@draft → @spec → @implemented`. Each companion skill ow
 
 `facts check` can delegate manual facts (those without a command) to an AI agent for verification. The agent reads the codebase and reports whether each fact holds.
 
-**Resolution chain** (first match wins):
-1. `--agent` flag: `facts check --agent claude`
-2. `.config agent` key in `.facts` (set via `facts config set agent claude`)
-3. Auto-detection: scans PATH for known agent binaries in preset order
+**Opt-in only:** agent verification runs only when you pass `--agent`. Without it, manual facts stay `?`.
+
+**Resolution chain** when `--agent` is passed (first match wins):
+1. `--agent <value>` — preset name or shell template with `%p`
+2. Bare `--agent` — `.config agent` key (set via `facts config set agent claude`)
+3. Bare `--agent` with no config — scans PATH for known agent binaries in preset order
 
 **Presets:** `claude`, `codex`, `pi`, `droid`, `opencode`, `mi`. Each maps to a command template (e.g. `claude` becomes `claude -p %p`). Custom templates use `%p` as the prompt placeholder: `--agent "my-agent run %p"`.
 
@@ -176,7 +179,7 @@ Rules:
 - Facts with no matching verdict are reported as "unresolved" (treated as failures)
 
 **Flags:**
-- `--no-agent` — skip agent verification entirely, manual facts stay as `?`
+- `--no-agent` — skip agent verification (default behavior without `--agent`)
 - `--id <ID>` — check only specific facts (repeatable, composes with all filters)
 - `--section "path"` — filter by section path (case-insensitive sub-path match, includes children)
 - `--tags "expr"` — boolean tag filter (e.g. `"ci and not draft"`)

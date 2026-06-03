@@ -472,8 +472,10 @@ pub fn run(opts: &CheckOptions) -> Result<bool> {
     // Agent verification of manual facts.
     let resolved_agent = if opts.no_agent {
         None
+    } else if let Some(agent_flag) = &opts.agent {
+        agent::resolve_agent(agent_flag, &root)
     } else {
-        agent::resolve_agent(opts.agent.as_deref(), &root)
+        None
     };
 
     if let Some(ref agent) = resolved_agent

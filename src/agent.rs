@@ -79,21 +79,23 @@ pub struct ResolvedAgent {
     pub name: String,
 }
 
-/// Resolve which agent command to use.
-/// Priority: explicit --agent flag > .config agent key > PATH auto-detect.
-pub fn resolve_agent(flag: Option<&str>, project_root: &Path) -> Option<ResolvedAgent> {
-    if let Some(agent) = flag {
-        let trimmed = agent.trim();
-        if !trimmed.is_empty() {
-            let (template, name) = resolve_preset_or_literal(trimmed);
-            return Some(ResolvedAgent { template, name });
-        }
+/// Resolve which agent command to use when `--agent` was passed on the CLI.
+///
+/// Call only after the user opts in with `--agent`. Without that flag, `facts check`
+/// does not run an agent.
+///
+/// Priority: explicit `--agent` value > `.config agent` > PATH auto-detect (presets in order).
+pub fn resolve_agent(flag: &str, project_root: &Path) -> Option<ResolvedAgent> {
+    let trimmed = flag.trim();
+    if !trimmed.is_empty() {
+        let (template, name) = resolve_preset_or_literal(trimmed);
+        return Some(ResolvedAgent { template, name });
     }
 
     if let Some(config_val) = crate::config::read_config_value(project_root, "agent") {
-        let trimmed = config_val.trim();
-        if !trimmed.is_empty() {
-            let (template, name) = resolve_preset_or_literal(trimmed);
+        let config_trimmed = config_val.trim();
+        if !config_trimmed.is_empty() {
+            let (template, name) = resolve_preset_or_literal(config_trimmed);
             return Some(ResolvedAgent { template, name });
         }
     }

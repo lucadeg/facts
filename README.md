@@ -102,7 +102,7 @@ Every fact moves through this pipeline. At any point you can run `facts check` a
 
 <img src="assets/readme/howto-2.png" alt="2. Verify" width="700" />
 
-**Verify** your facts with `facts check`, which lints all files, runs every command, and sends manual facts to an AI agent for verification. It groups results by status: green pass, red fail, yellow manual/unresolved. Use `--agent claude` (or any preset: `codex`, `pi`, `droid`, `opencode`, `mi`) or set a persistent default with `facts config set agent claude`. Auto-detects agents on your PATH. It exits 0 when everything passes, non-zero when anything fails. Plug it into CI or let your agent run it after every change.
+**Verify** your facts with `facts check`, which lints all files and runs every command-fact. Manual facts stay as `?` unless you opt in with `--agent`. Use `--agent claude` (or any preset: `codex`, `pi`, `droid`, `opencode`, `mi`), bare `--agent` to use `facts config set agent …`, or a custom template with `%p`. It exits 0 when everything passes, non-zero when anything fails. Plug it into CI or let your agent run it after every change.
 
 <img src="assets/readme/howto-3.png" alt="3. Implement" width="700" />
 
@@ -151,9 +151,9 @@ Common short aliases (all extra args are passed through to the real command):
 facts                                    # list all facts (default)
 facts ll                                 # list in markdown-like skim format
 facts ll --tags "draft"                  # combine alias + filter
-facts check                              # verify everything (auto-detects agent)
-facts check --agent claude               # verify with a specific agent
-facts check --no-agent                   # command-facts only, skip agent
+facts check                              # command-facts only; manual facts stay ?
+facts check --agent                      # also verify manual facts (uses .config agent)
+facts check --agent claude               # verify manual facts with Claude
 facts check --id abc --agent claude      # verify one fact with the agent
 facts check --tags "mvp and not blocked" # filter by tag expression
 facts check --section api/auth           # filter by section path

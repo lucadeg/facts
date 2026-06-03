@@ -169,7 +169,7 @@ impl App {
             tree_filter: None,
             pending_delete: None,
             check_timeout: Some(Duration::from_secs(30)),
-            agent_disabled: false,
+            agent_disabled: true,
         };
         app.load_data()?;
         Ok(app)
@@ -1045,7 +1045,7 @@ impl App {
         let resolved_agent = if self.agent_disabled {
             None
         } else {
-            crate::agent::resolve_agent(None, &root)
+            crate::agent::resolve_agent("", &root)
         };
 
         // Resolve batch size from .config, matching CLI behavior.

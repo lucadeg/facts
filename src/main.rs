@@ -131,13 +131,19 @@ enum Command {
         #[arg(long)]
         timeout: Option<u64>,
 
-        /// Agent for manual facts: a preset name (claude, codex, pi, droid, opencode, mi) or
-        /// a shell command template with %p as the prompt placeholder (e.g. "claude -p %p").
-        /// Without this flag, auto-detects by checking .config agent, then scanning PATH for presets.
-        #[arg(long, conflicts_with = "no_agent")]
+        /// Verify manual facts with an AI agent (opt-in). Preset: claude, codex, pi, droid,
+        /// opencode, mi; or a shell command template with %p; or bare `--agent` for `.config agent`
+        /// then PATH auto-detect. Without this flag, manual facts stay as `?`.
+        #[arg(
+            long,
+            num_args = 0..=1,
+            default_missing_value = "",
+            require_equals = false,
+            conflicts_with = "no_agent"
+        )]
         agent: Option<String>,
 
-        /// Suppress agent verification of manual facts entirely (skip auto-detection and .config).
+        /// Skip agent verification even when `--agent` is passed (manual facts stay as `?`).
         #[arg(long, conflicts_with = "agent")]
         no_agent: bool,
 
